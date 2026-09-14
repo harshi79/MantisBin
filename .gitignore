@@ -1,0 +1,15 @@
+```
+# Dependencies
+node_modules/
+
+# Database
+data/mantisbin.db
+
+# Package lock
+package-lock.json
+
+# Build artifacts from better-sqlite3
+node_modules/better-sqlite3/build/
+node_modules/better-sqlite3/deps/sqlite3/
+
+```
