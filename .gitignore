@@ -1,15 +1,26 @@
-```
 # Dependencies
 node_modules/
 
-# Database
-data/mantisbin.db
+# Local dev database and data directory
+.data/
+data/
+*.db
+*.db-journal
+*.sqlite
 
-# Package lock
+# Secrets — never commit these
+.dev.vars
+.env
+.env.*
+!.dev.vars.example
+
+# Package lock (repo convention: dependencies are pinned by semver ranges)
 package-lock.json
 
-# Build artifacts from better-sqlite3
-node_modules/better-sqlite3/build/
-node_modules/better-sqlite3/deps/sqlite3/
+# Build output
+dist/
+.wrangler/
 
-```
+# Logs / os cruft
+*.log
+.DS_Store

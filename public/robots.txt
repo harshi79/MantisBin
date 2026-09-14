@@ -1,0 +1,11 @@
+# MantisBin — the site itself may be indexed; pastes are unlisted by design
+# and additionally carry X-Robots-Tag: noindex and <meta name="robots">.
+User-agent: *
+Allow: /
+Disallow: /p/
+Disallow: /me
+Disallow: /login
+Disallow: /register
+Disallow: /api/
+
+Sitemap: none
