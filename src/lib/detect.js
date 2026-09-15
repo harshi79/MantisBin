@@ -87,7 +87,11 @@ export function detectLanguage(value, byteCount) {
   if (/^#!.*\b(?:node|deno|bun)\b/i.test(firstLine)) return 'javascript';
 
   // Unambiguous document wrappers beat programming-language fingerprints.
-  if (/^<!doctype\s+html\b/i.test(trimmed) || /<html(?:\s|>)/i.test(trimmed)) return 'html';
+  if (
+    /^<!doctype\s+html\b/i.test(trimmed) ||
+    /<html(?:\s|>)/i.test(trimmed) ||
+    /<(?:head|body|div|span|p|a|ul|ol|li|table|section|article|script|style)(?:\s|>)/i.test(trimmed)
+  ) return 'html';
   if (/^<\?xml\b/i.test(trimmed) || (/<[A-Za-z][\w:.-]*(?:\s[^<>]{0,120})?>/.test(trimmed) && /<\/[A-Za-z][\w:.-]*\s*>/.test(trimmed))) return 'xml';
 
   // Dockerfiles and Makefiles have distinctive line-oriented markers.
@@ -101,7 +105,11 @@ export function detectLanguage(value, byteCount) {
     countLines(lines, /^(?:```|~~~)/) +
     countLines(lines, /^(?:[-*+]\s+|>\s+)/) +
     (/[[][^\]\n]{1,120}\]\([^\s)]+\)/.test(sample) ? 1 : 0);
-  if (markdownMarkers >= 2 || countLines(lines, /^#{1,6}\s+/) >= 2) return 'markdown';
+  if (
+    markdownMarkers >= 2 ||
+    countLines(lines, /^#{1,6}\s+/) >= 2 ||
+    (countLines(lines, /^#{1,6}\s+/) === 1 && lines.length >= 3 && lines[1].trim() === '')
+  ) return 'markdown';
 
   // YAML and INI/TOML are line-oriented too. Require multiple structural
   // markers so a single colon in prose remains plaintext.
@@ -114,23 +122,26 @@ export function detectLanguage(value, byteCount) {
   const scores = new Map();
   const add = (id, amount) => scores.set(id, (scores.get(id) || 0) + amount);
 
-  // Shell: commands and shell operators are useful together, but each alone is
-  // intentionally weak because they occur in ordinary prose.
-  if (countLines(lines, /^\s*(?:export|unset|set\s+-[eux]+|source|printf|echo|cd|chmod|curl|wget)\b/) >= 1) add('bash', 2);
+  // Shell: a command-shaped line is enough for a useful answer, while prose
+  // only wins when it also contains shell expansion/operators.
+  if (countLines(lines, /^\s*(?:export|unset|set\s+-[eux]+|source|printf|echo|cd|chmod|curl|wget)\b/) >= 1) add('bash', 3);
   if (/[|&]{1,2}|\$\{?[A-Za-z_][A-Za-z0-9_]*\}?/.test(sample)) add('bash', 1);
   if (countLines(lines, /^\s*if\s+.+;\s*then\s*$/) >= 1 || countLines(lines, /^\s*(?:fi|done)\s*$/) >= 1) add('bash', 2);
 
   // Python.
   if (countLines(lines, /^\s*(?:async\s+)?def\s+[A-Za-z_]\w*\s*\(/) >= 1) add('python', 3);
   if (countLines(lines, /^\s*(?:from\s+\S+\s+import|import\s+[A-Za-z_][\w.]*)\b/) >= 1) add('python', 2);
-  if (/if\s+__name__\s*==\s*["']__main__["']/.test(sample) || /\b(?:print|len|range)\s*\(/.test(sample)) add('python', 1);
+  if (/if\s+__name__\s*==\s*["']__main__["']/.test(sample)) add('python', 2);
+  if (/\b(?:print|len|range)\s*\(/.test(sample)) add('python', 2);
 
-  // JavaScript / TypeScript. TypeScript-specific declarations get a head start
-  // but ordinary JS syntax is never treated as TypeScript by itself.
-  if (countLines(lines, /^\s*(?:interface|type)\s+[A-Za-z_$][\w$]*/) >= 1) add('typescript', 3);
-  if (/\b(?:interface|type\s+[A-Za-z_$][\w$]*\s*=|enum)\b/.test(sample) || /:\s*(?:string|number|boolean|unknown|void)\b/.test(sample)) add('typescript', 2);
+  // JavaScript / TypeScript. TypeScript-specific declarations get a head start;
+  // a type annotation beats the otherwise identical JavaScript declaration.
+  if (countLines(lines, /^\s*(?:interface|type)\s+[A-Za-z_$][\w$]*/) >= 1) add('typescript', 4);
+  if (/\b(?:interface|type\s+[A-Za-z_$][\w$]*\s*=|enum)\b/.test(sample)) add('typescript', 2);
+  if (/:\s*(?:string|number|boolean|unknown|void|never|[A-Z][A-Za-z_$][\w$]*)\b/.test(sample) || /\bas\s+const\b/.test(sample)) add('typescript', 3);
   if (/\b(?:const|let|var)\s+[A-Za-z_$][\w$]*\s*=/.test(sample)) add('javascript', 2);
-  if (/\b(?:function|console\.(?:log|error)|require|import\s+.+\s+from|export\s+(?:default\s+)?|await\s+)\b/.test(sample) || /=>/.test(sample)) add('javascript', 2);
+  if (/\bfunction\s+[A-Za-z_$][\w$]*\s*\(/.test(sample)) add('javascript', 3);
+  if (/\b(?:console\.(?:log|error)|require|import\s+.+\s+from|export\s+(?:default\s+)?|await\s+)\b/.test(sample) || /=>/.test(sample)) add('javascript', 2);
 
   // SQL statements are deliberately anchored at the beginning of a line.
   if (countLines(lines, /^\s*(?:SELECT|INSERT\s+INTO|UPDATE\s+\S+\s+SET|DELETE\s+FROM|CREATE\s+(?:TABLE|INDEX|VIEW)|ALTER\s+TABLE|WITH\s+\w+\s+AS)\b/i) >= 1) add('sql', 4);
@@ -141,9 +152,10 @@ export function detectLanguage(value, byteCount) {
   if (/\b(?:package\s+main|func\s+main\s*\(|fmt\.|:=)\b/.test(sample)) add('go', 4);
   if (/\b(?:fn\s+main\s*\(|use\s+std::|let\s+mut|println!\s*\()/.test(sample)) add('rust', 4);
   if (/\b(?:fun\s+main\s*\(|println!\s*\(|val\s+\w+\s*=|var\s+\w+\s*=)/.test(sample)) add('kotlin', 3);
-  if (/\b(?:import\s+Foundation|struct\s+\w+\s*:\s*|guard\s+let|print\s*\()/.test(sample)) add('swift', 3);
+  if (/\b(?:import\s+Foundation|struct\s+\w+\s*:\s*|guard\s+let|let\s+\w+\s*=|var\s+\w+\s*=)/.test(sample)) add('swift', 3);
   if (/\b(?:public\s+class|static\s+void\s+main|System\.out\.|package\s+[\w.]+;)/.test(sample)) add('java', 4);
-  if (/<\?php\b|\$[A-Za-z_]\w*\s*=|\b(?:echo|require_once)\s+/.test(sample)) add('php', 3);
+  if (/<\?php\b/.test(sample)) add('php', 4);
+  if (/\$[A-Za-z_]\w*\s*=|\brequire_once\s+/.test(sample)) add('php', 3);
   if (/\b(?:def\s+\w+\s*\([^)]*\)|puts\s+|require\s+["']|end\s*$)/m.test(sample)) add('ruby', 3);
   if (/\b(?:local\s+\w+\s*=|function\s+\w+\s*\(|then\s*$|end\s*$)/m.test(sample) && /\b(?:local|nil|lua)\b/.test(sample)) add('lua', 3);
   if (/#include\s*<[^>]+>|\bstd::|\b(?:printf|scanf)\s*\(/.test(sample)) add(/\bstd::|#include\s*<iostream>|\bcout\b/.test(sample) ? 'cpp' : 'c', 4);

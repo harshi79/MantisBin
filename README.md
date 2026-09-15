@@ -186,7 +186,7 @@ This is the source of truth for the 2.2 work. Keep the product private, unlisted
 | 2 | Burn-after-reading pastes | **shipped** |
 | 3 | Fork / duplicate paste | **shipped** |
 | 4 | Optional automatic language detection | **shipped** |
-| 5 | QR sharing | planned |
+| 5 | QR sharing | **shipped** |
 
 #### 1. Password-protected pastes — shipped
 
