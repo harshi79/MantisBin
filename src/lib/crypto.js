@@ -71,7 +71,26 @@ export async function hmacSha256Hex(secret, data) {
   return toHex(await subtle.sign('HMAC', key, /** @type {BufferSource} */ (toBytes(data))));
 }
 
-const PBKDF2_ITERATIONS = 210_000;
+/**
+ * Cloudflare Workers *hard-caps* PBKDF2 at 100 000 iterations per
+ * `crypto.subtle.deriveBits()` call. Asking for more throws
+ * `NotSupportedError: Pbkdf2 failed: iteration counts above 100000 are not
+ * supported (requested …)` — which every registration/login turned into a 500.
+ *
+ * The cap is production-only: `wrangler dev` / Miniflare happily run 1 000 000
+ * iterations, so a value above this ceiling tests green locally and then breaks
+ * on the edge. Never raise `PBKDF2_ITERATIONS` above `PBKDF2_MAX_ITERATIONS`.
+ *
+ * The count is embedded in every stored hash (`pbkdf2-sha256$<iters>$…`), so
+ * changing it never invalidates existing passwords: verification reads the
+ * count back out of the stored string. Lower it (only if a request ever trips
+ * the Workers CPU-time limit) rather than raising it.
+ */
+export const PBKDF2_ITERATIONS = 100_000;
+/** Documented Cloudflare Workers ceiling for a single PBKDF2 call. */
+export const PBKDF2_MAX_ITERATIONS = 100_000;
+/** Floor used when a runtime rejects even the documented ceiling. */
+const PBKDF2_MIN_ITERATIONS = 1_000;
 const PBKDF2_KEY_LENGTH = 256; // bits
 
 /**
@@ -82,8 +101,8 @@ const PBKDF2_KEY_LENGTH = 256; // bits
  */
 export async function hashPassword(password) {
   const salt = randomBytes(16);
-  const hash = await pbkdf2(password, salt, PBKDF2_ITERATIONS);
-  return `pbkdf2-sha256$${PBKDF2_ITERATIONS}$${bytesToBase64Url(salt)}$${bytesToBase64Url(hash)}`;
+  const { bits, iterations } = await pbkdf2(password, salt, PBKDF2_ITERATIONS);
+  return `pbkdf2-sha256$${iterations}$${bytesToBase64Url(salt)}$${bytesToBase64Url(bits)}`;
 }
 
 /**
@@ -97,15 +116,43 @@ export async function verifyPassword(password, stored) {
   const iterations = Number(parts[1]);
   if (!Number.isFinite(iterations) || iterations < 1000) return false;
   let salt;
+  let expected;
   try {
     salt = base64UrlToBytes(parts[2]);
+    expected = base64UrlToBytes(parts[3]);
   } catch {
+    // Corrupt / truncated record: treat as "does not match" instead of throwing.
     return false;
   }
-  const expected = await pbkdf2(password, salt, iterations);
-  return timingSafeEqual(base64UrlToBytes(parts[3]), new Uint8Array(expected));
+  if (salt.length === 0 || expected.length === 0) return false;
+  if (iterations > PBKDF2_MAX_ITERATIONS) {
+    // Legacy records written by a runtime with a higher ceiling (e.g. local dev)
+    // cannot be recomputed here. Fail the login, never the request.
+    console.warn(
+      `[mantisbin] stored password hash uses ${iterations} PBKDF2 iterations, above this runtime's ${PBKDF2_MAX_ITERATIONS} ceiling; the password has to be reset.`,
+    );
+  }
+  const { bits } = await pbkdf2(password, salt, iterations);
+  return timingSafeEqual(expected, new Uint8Array(bits));
 }
 
+/**
+ * A runtime refusing the iteration count looks like this — workerd throws
+ * `NotSupportedError`, other WebCrypto implementations may word it differently.
+ * @param {unknown} error
+ */
+function isIterationLimitError(error) {
+  if (!error || typeof error !== 'object') return false;
+  const { name, message } = /** @type {Error} */ (error);
+  if (name === 'NotSupportedError') return true;
+  return /iteration count/i.test(String(message || ''));
+}
+
+/**
+ * PBKDF2-HMAC-SHA256 that degrades instead of blowing up when the runtime
+ * refuses the requested iteration count: it steps down to a supported value.
+ * Returns the count actually used so callers can record it next to the salt.
+ */
 async function pbkdf2(password, salt, iterations) {
   if (!subtle) throw new Error('WebCrypto unavailable');
   const keyMaterial = await subtle.importKey(
@@ -115,11 +162,22 @@ async function pbkdf2(password, salt, iterations) {
     false,
     ['deriveBits'],
   );
-  return await subtle.deriveBits(
-    { name: 'PBKDF2', salt: /** @type {BufferSource} */ (salt), iterations, hash: 'SHA-256' },
-    keyMaterial,
-    PBKDF2_KEY_LENGTH,
-  );
+  const requested = Number.isFinite(iterations) ? Math.floor(iterations) : PBKDF2_MIN_ITERATIONS;
+  let count = Math.min(Math.max(requested, PBKDF2_MIN_ITERATIONS), PBKDF2_MAX_ITERATIONS);
+  for (;;) {
+    try {
+      const bits = await subtle.deriveBits(
+        { name: 'PBKDF2', salt: /** @type {BufferSource} */ (salt), iterations: count, hash: 'SHA-256' },
+        keyMaterial,
+        PBKDF2_KEY_LENGTH,
+      );
+      return { bits, iterations: count };
+    } catch (error) {
+      if (!isIterationLimitError(error) || count <= PBKDF2_MIN_ITERATIONS) throw error;
+      count = Math.max(PBKDF2_MIN_ITERATIONS, Math.floor(count / 2));
+      console.warn(`[mantisbin] PBKDF2 rejected ${requested} iterations on this runtime; retrying with ${count}.`);
+    }
+  }
 }
 
 /** Constant-time comparison of equal-length byte arrays. */

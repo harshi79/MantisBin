@@ -95,7 +95,7 @@ values — `npm run dev` then uses the real database.
 
 - Paste IDs: 8 random base62 characters (`/p/a8Kx92Lm`) — no sequential ids, no custom slugs.
 - Expirations: 10 min, 1 h, 6 h, 1 day, 1 week, 30 days, 1 year, **never**. Expired rows are deleted.
-- Titles: required, ≤ 120 chars. Usernames: 4–6 letters/digits. Passwords: ≥ 8 chars, PBKDF2-SHA256 (210k).
+- Titles: required, ≤ 120 chars. Usernames: 4–6 letters/digits. Passwords: ≥ 8 chars, PBKDF2-SHA256 (100k — the Cloudflare Workers ceiling).
 - View counts dedupe repeat visitors per paste for 6 hours (IPs stored only as HMAC hashes).
 - Reads via API: 3000/hour per IP. Auth endpoints: 40/15 min per IP. All limits are abuse guards, not quotas.
 - Highlighting + linkification are skipped above 256 KB so huge pastes render instantly; `/raw` always returns exact bytes.
@@ -132,7 +132,11 @@ Design rules the codebase follows:
 
 ## Security notes
 
-- Passwords: PBKDF2-HMAC-SHA256, 210 000 iterations, per-user salt; constant-time compares.
+- Passwords: PBKDF2-HMAC-SHA256, 100 000 iterations (the Cloudflare Workers ceiling —
+  `deriveBits` throws `NotSupportedError` above it), per-user salt; constant-time compares.
+  The iteration count is stored inside every hash, so it can be tuned without locking anyone out.
+  Hashes written with more than 100 000 iterations (only possible off-Workers, e.g. `npm run dev`
+  against the same database) cannot be recomputed on the edge: those accounts need a password reset.
 - Sessions: 256-bit random tokens in `HttpOnly; SameSite=Lax` cookies; only SHA-256 hashes stored.
 - API keys: `mb_` + 32 random chars, stored hashed, shown once, max 3 per account.
 - Paste pages send `X-Robots-Tag: noindex, nofollow` + `<meta name="robots">`; `robots.txt`

@@ -87,6 +87,31 @@ export function jsonBody(values) {
   return JSON.stringify(values);
 }
 
+/**
+ * Make WebCrypto behave like production Cloudflare Workers, which hard-caps
+ * PBKDF2 at 100 000 iterations and throws `NotSupportedError` above it.
+ * Node and `wrangler dev` do not enforce the cap — which is exactly how an
+ * over-cap work factor tests green locally and 500s on the edge.
+ * @param {number} cap
+ * @returns {() => void} restore
+ */
+export function withWorkersPbkdf2Cap(cap = 100_000) {
+  const prototype = Object.getPrototypeOf(globalThis.crypto.subtle);
+  const original = prototype.deriveBits;
+  prototype.deriveBits = async function deriveBits(algorithm, ...rest) {
+    if (algorithm?.name === 'PBKDF2' && algorithm.iterations > cap) {
+      throw new DOMException(
+        `Pbkdf2 failed: iteration counts above ${cap} are not supported (requested ${algorithm.iterations}).`,
+        'NotSupportedError',
+      );
+    }
+    return original.call(this, algorithm, ...rest);
+  };
+  return () => {
+    prototype.deriveBits = original;
+  };
+}
+
 /** Pull the paste id out of a `Location: /p/:id?created=1` header. */
 export function pasteIdFrom(response) {
   const location = response.headers.get('location') || '';
