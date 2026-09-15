@@ -30,18 +30,20 @@ export const SCHEMA = [
   `CREATE INDEX IF NOT EXISTS idx_sessions_expiry ON sessions (expires_at)`,
 
   `CREATE TABLE IF NOT EXISTS pastes (
-    id         TEXT    PRIMARY KEY,
-    title      TEXT    NOT NULL,
-    content    TEXT    NOT NULL,
-    language   TEXT    NOT NULL DEFAULT 'plaintext',
-    font       TEXT    NOT NULL DEFAULT 'mono',
-    font_size  INTEGER NOT NULL DEFAULT 14,
-    size       INTEGER NOT NULL DEFAULT 0,
-    views      INTEGER NOT NULL DEFAULT 0,
-    user_id    INTEGER,
-    created_at INTEGER NOT NULL,
-    updated_at INTEGER NOT NULL,
-    expires_at INTEGER
+    id            TEXT    PRIMARY KEY,
+    title         TEXT    NOT NULL,
+    content       TEXT    NOT NULL,
+    language      TEXT    NOT NULL DEFAULT 'plaintext',
+    font          TEXT    NOT NULL DEFAULT 'mono',
+    font_size     INTEGER NOT NULL DEFAULT 14,
+    size          INTEGER NOT NULL DEFAULT 0,
+    views         INTEGER NOT NULL DEFAULT 0,
+    user_id       INTEGER,
+    created_at    INTEGER NOT NULL,
+    updated_at    INTEGER NOT NULL,
+    expires_at    INTEGER,
+    -- Optional passphrase: only ever the PBKDF2 hash, never the passphrase.
+    password_hash TEXT
   )`,
   // Listing a user's pastes, newest first.
   `CREATE INDEX IF NOT EXISTS idx_pastes_user_created ON pastes (user_id, created_at DESC)`,
@@ -76,7 +78,42 @@ export const SCHEMA = [
   `CREATE INDEX IF NOT EXISTS idx_rate_limits_reset ON rate_limits (reset_at)`,
 ];
 
+/**
+ * Additive migrations for databases that already exist in production.
+ * `CREATE TABLE IF NOT EXISTS` never touches an existing table, so every new
+ * column needs its own `ALTER TABLE`. The column list is read first, so a
+ * migrated database costs one cheap PRAGMA per cold start and nothing else.
+ *
+ * Keep this list append-only: migrations are never edited or removed.
+ */
+const MIGRATIONS = [
+  // 2.2 §1 — optional per-paste passphrase.
+  { table: 'pastes', column: 'password_hash', sql: 'ALTER TABLE pastes ADD COLUMN password_hash TEXT' },
+];
+
+function isDuplicateColumn(error) {
+  return /duplicate column name/i.test(String(error?.message || error || ''));
+}
+
+/** Column names of a table, or an empty set when the table does not exist yet. */
+async function tableColumns(db, table) {
+  const rows = await db.all(`SELECT name FROM pragma_table_info('${table}')`);
+  return new Set(rows.map((row) => String(row.name)));
+}
+
 /** Idempotent — safe to run on every cold start / dev boot. */
 export async function ensureSchema(db) {
   await db.batch(SCHEMA.map((sql) => ({ sql })));
+  /** @type {Map<string, Set<string>>} */
+  const columns = new Map();
+  for (const migration of MIGRATIONS) {
+    if (!columns.has(migration.table)) columns.set(migration.table, await tableColumns(db, migration.table));
+    if (columns.get(migration.table)?.has(migration.column)) continue;
+    try {
+      await db.run(migration.sql);
+    } catch (error) {
+      // Two isolates cold-starting at once: the loser sees "duplicate column name".
+      if (!isDuplicateColumn(error)) throw error;
+    }
+  }
 }

@@ -7,14 +7,36 @@
  *   PATCH  /api/pastes/:id      update own (API key)
  *   DELETE /api/pastes/:id      delete own (API key)
  *   GET    /api/pastes/:id/raw  raw text (public)
+ *   POST   /api/pastes/:id/unlock  unlock a password-protected paste (public)
  *   GET    /api/meta            vocabularies + limits (public)
  *   GET    /api/health          liveness (public)
  */
 
-import { EXPIRATIONS, FONTS, FONT_SIZES, LANGUAGES, LIMITS, RATE_LIMITS, SITE } from '../config.js';
+import {
+  COOKIE,
+  EXPIRATIONS,
+  FONTS,
+  FONT_SIZES,
+  LANGUAGES,
+  LIMITS,
+  RATE_LIMITS,
+  SITE,
+  UNLOCK_MAX_TOKENS,
+  UNLOCK_TTL_SECONDS,
+} from '../config.js';
 import { authenticateApiKey } from '../lib/auth.js';
+import { appSecret, canReadPaste } from '../lib/access.js';
 import { HttpError, jsonResponse, parseJson, readBody, textResponse } from '../lib/http.js';
 import { consume } from '../lib/ratelimit.js';
+import {
+  hashPassphrase,
+  issueUnlockToken,
+  isProtected,
+  rememberUnlock,
+  unlockBucketKey,
+  unlockCookieString,
+  verifyPassphrase,
+} from '../lib/unlock.js';
 import {
   isValidPasteId,
   normalizeExpiration,
@@ -23,6 +45,7 @@ import {
   normalizeLanguage,
   safeFilename,
   validateContent,
+  validatePassphrase,
   validateTitle,
 } from '../lib/validate.js';
 import { createPaste, deletePaste, getPaste, listUserPastes, updatePaste } from '../lib/pastes.js';
@@ -54,9 +77,24 @@ export function serializePaste(paste, origin, options = {}) {
     createdAt: iso(paste.created_at),
     updatedAt: iso(paste.updated_at),
     expiresAt: iso(paste.expires_at),
+    /** True when reading the paste requires an unlocked passphrase. */
+    protected: isProtected(paste),
   };
   if (options.content) base.content = paste.content;
   return base;
+}
+
+/**
+ * Read the optional passphrase from a JSON body. `undefined` must mean "field
+ * absent" (keep the current lock), so this uses key presence — `??` would
+ * silently turn an explicit `password: null` (remove the lock) into "absent".
+ * @param {any} body
+ * @returns {{ provided: boolean, value: any }}
+ */
+function readPasswordInput(body) {
+  if (Object.hasOwn(body, 'password')) return { provided: true, value: body.password };
+  if (Object.hasOwn(body, 'passphrase')) return { provided: true, value: body.passphrase };
+  return { provided: false, value: undefined };
 }
 
 /** Pull an API key out of Authorization: Bearer or X-API-Key. */
@@ -66,6 +104,22 @@ function keyFromRequest(request) {
   const direct = request.headers.get('x-api-key');
   if (direct) return direct.trim();
   return null;
+}
+
+/**
+ * Ownership proof for locked reads, without paying for a key lookup on the
+ * common path: this runs only when a paste is protected *and* still locked. An
+ * API key that belongs to the paste's account is exactly the same proof as a
+ * signed-in session on the web, so owners never need their own passphrase.
+ * @param {Ctx} ctx
+ * @param {any} paste
+ */
+async function apiKeyOwnsPaste(ctx, paste) {
+  if (paste.user_id === null || paste.user_id === undefined) return false;
+  const key = keyFromRequest(ctx.request);
+  if (!key) return false;
+  const auth = await authenticateApiKey(ctx.db, key, ctx.now);
+  return Boolean(auth) && Number(paste.user_id) === Number(auth.user.id);
 }
 
 /** @param {Ctx} ctx */
@@ -96,6 +150,14 @@ export async function meta(ctx) {
       accountBytes: LIMITS.userMaxBytes,
       titleMax: LIMITS.titleMax,
       highlightBytes: LIMITS.highlightMaxBytes,
+      passphraseMin: LIMITS.passphraseMin,
+      passphraseMax: LIMITS.passphraseMax,
+    },
+    unlock: {
+      seconds: UNLOCK_TTL_SECONDS,
+      maxRemembered: UNLOCK_MAX_TOKENS,
+      attempts: RATE_LIMITS.unlock.limit,
+      windowSeconds: RATE_LIMITS.unlock.window,
     },
     rateLimits: RATE_LIMITS,
   });
@@ -116,6 +178,14 @@ export async function create(ctx) {
   if (!content.ok) throw new HttpError(413, content.error);
 
   const expiration = normalizeExpiration(body.expiresIn ?? body.expiration);
+  // `password` (camelcase JSON) or `passphrase`; empty/omitted means no lock.
+  const passphrase = readPasswordInput(body);
+  let passwordHash = null;
+  if (passphrase.value !== undefined && passphrase.value !== null && passphrase.value !== '') {
+    const check = validatePassphrase(passphrase.value);
+    if (!check.ok) throw new HttpError(400, check.error);
+    passwordHash = await hashPassphrase(String(check.value));
+  }
   const paste = await createPaste(ctx.db, {
     title: title.value,
     content: content.value,
@@ -124,6 +194,7 @@ export async function create(ctx) {
     fontSize: normalizeFontSize(body.fontSize ?? body.font_size),
     expiresAt: expiration.expiresAt,
     userId: auth.user.id,
+    passwordHash,
     now: ctx.now,
   });
 
@@ -148,7 +219,56 @@ export async function get(ctx, params) {
   if (!isValidPasteId(params.id)) throw new HttpError(404, 'Unknown paste id.');
   const paste = await getPaste(ctx.db, params.id, { content: true, now: ctx.now });
   if (!paste) throw new HttpError(404, 'Paste not found, expired or deleted.');
+  // Nothing about a protected paste leaks here — not even the title.
+  if (!(await canReadPaste(ctx, paste)) && !(await apiKeyOwnsPaste(ctx, paste))) throw protectedError();
   return jsonResponse(serializePaste(paste, ctx.url.origin, { content: true }), 200, {}, { noindex: true });
+}
+
+/** 401 for every JSON route that refuses to serve a locked paste. Empty body. */
+function protectedError() {
+  return new HttpError(
+    401,
+    'This paste is password-protected. Unlock it first: POST /api/pastes/:id/unlock (or open /p/:id in a browser).',
+    { 'WWW-Authenticate': 'mantisbin-unlock' },
+  );
+}
+
+/**
+ * POST /api/pastes/:id/unlock — scriptable unlock. Verifies the passphrase,
+ * sets the same HttpOnly cookie the web form sets (use `curl -c jar`), and
+ * returns when the unlock expires. Never returns the content or the passphrase.
+ */
+export async function unlock(ctx, params) {
+  const verdict = await consume(ctx.db, `apiread:${ctx.ip}`, RATE_LIMITS.apiRead);
+  if (!verdict.ok) {
+    throw new HttpError(429, 'Rate limit exceeded.', { 'Retry-After': String(verdict.retryAfter) });
+  }
+  if (!isValidPasteId(params.id)) throw new HttpError(404, 'Unknown paste id.');
+  const paste = await getPaste(ctx.db, params.id, { content: false, now: ctx.now });
+  if (!paste) throw new HttpError(404, 'Paste not found, expired or deleted.');
+  if (!isProtected(paste)) throw new HttpError(400, 'This paste is not password-protected.');
+
+  const attempts = await consume(ctx.db, unlockBucketKey(paste.id, ctx.ip), RATE_LIMITS.unlock);
+  if (!attempts.ok) {
+    throw new HttpError(429, 'Too many unlock attempts for this paste.', {
+      'Retry-After': String(attempts.retryAfter),
+    });
+  }
+
+  const body = parseJson(await readBody(ctx.request, 4 * 1024));
+  const passphrase = body.password ?? body.passphrase;
+  const ok = await verifyPassphrase(passphrase, paste.password_hash);
+  if (!ok) throw new HttpError(401, 'Wrong passphrase.');
+
+  const expiresAt = ctx.now + UNLOCK_TTL_SECONDS;
+  const entry = await issueUnlockToken(appSecret(ctx), paste.id, expiresAt);
+  const value = rememberUnlock(ctx.cookies[COOKIE.unlock] || '', entry, ctx.now, UNLOCK_MAX_TOKENS);
+  return jsonResponse(
+    { unlocked: true, id: paste.id, expiresAt: iso(expiresAt) },
+    200,
+    { 'Set-Cookie': unlockCookieString(value, { secure: ctx.secure }) },
+    { noindex: true },
+  );
 }
 
 /** GET /api/pastes/:id/raw */
@@ -160,6 +280,7 @@ export async function raw(ctx, params) {
   if (!isValidPasteId(params.id)) throw new HttpError(404, 'Unknown paste id.');
   const paste = await getPaste(ctx.db, params.id, { content: true, now: ctx.now });
   if (!paste) throw new HttpError(404, 'Paste not found, expired or deleted.');
+  if (!(await canReadPaste(ctx, paste)) && !(await apiKeyOwnsPaste(ctx, paste))) throw protectedError();
   return textResponse(
     paste.content,
     200,
@@ -191,6 +312,19 @@ export async function update(ctx, params) {
       ? { expiresAt: existing.expires_at }
       : normalizeExpiration(body.expiresIn ?? body.expiration);
 
+  // `password: null` removes the protection, a string replaces it, absent keeps it.
+  const passphrase = readPasswordInput(body);
+  let passwordHash;
+  if (passphrase.provided) {
+    if (passphrase.value === null || passphrase.value === undefined || passphrase.value === '') {
+      passwordHash = null;
+    } else {
+      const check = validatePassphrase(passphrase.value);
+      if (!check.ok) throw new HttpError(400, check.error);
+      passwordHash = await hashPassphrase(String(check.value));
+    }
+  }
+
   const result = await updatePaste(
     ctx.db,
     params.id,
@@ -202,6 +336,7 @@ export async function update(ctx, params) {
       font: normalizeFont(body.font ?? existing.font),
       fontSize: normalizeFontSize(body.fontSize ?? body.font_size ?? existing.font_size),
       expiresAt: expiration.expiresAt,
+      passwordHash,
     },
     ctx.now,
   );

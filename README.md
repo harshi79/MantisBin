@@ -8,6 +8,7 @@ A fast, minimal paste-sharing utility for plain text and code.
 - No accounts required (optional accounts raise the limit and unlock edit/delete)
 - Unlisted pastes only: no feeds, no search, no discovery, `noindex` everywhere it matters
 - Manual syntax highlighting for 27 languages, rendered server-side (zero client JS needed to read a paste)
+- Optional password protection: a paste stays locked — title and content both hidden — until the passphrase is verified
 - Dark + light themes, system fonts only, no webfont/CDN requests
 - Public JSON API with key-gated writes
 - Built for **Cloudflare Workers + Cloudflare Assets**, backed by **Turso (libSQL/SQLite)**
@@ -25,7 +26,7 @@ The dev server runs the *exact same* application code as the production Worker,
 using Node 22's built-in SQLite (`.data/mantisbin.db`). No cloud account needed.
 
 ```bash
-npm test           # 39 end-to-end + unit tests (node:test)
+npm test           # 65 end-to-end + unit tests (node:test)
 npm run typecheck  # tsc --noEmit over JSDoc-typed JS
 npm run build      # wrangler deploy --dry-run (bundles the Worker + assets)
 npm run clean-expired   # manual expiration sweep
@@ -71,7 +72,8 @@ values — `npm run dev` then uses the real database.
 | --- | --- |
 | `GET /` | The editor. Title, language, font, size, expiration, paste, save. |
 | `POST /p` | Create a paste (form-encoded; works without JS) |
-| `GET /p/:id` | View a paste (public, unlisted, `noindex`) |
+| `GET /p/:id` | View a paste (public, unlisted, `noindex`). Shows the unlock screen when the paste is protected |
+| `POST /p/:id/unlock` | Verify a protected paste's passphrase, set the signed unlock cookie, redirect back to the paste |
 | `GET /p/:id/raw` | Exact bytes as `text/plain` — for `curl`, scripts, terminals (`?download=1` forces attachment) |
 | `GET/POST /p/:id/edit` | Edit **your own** paste (account required) |
 | `POST /p/:id/delete` | Delete **your own** paste |
@@ -80,7 +82,8 @@ values — `npm run dev` then uses the real database.
 | `GET /docs` | API documentation |
 | `GET /api/health`, `GET /api/meta` | Liveness + vocabularies/limits (public) |
 | `POST /api/pastes` | Create via API (**API key required**) |
-| `GET /api/pastes/:id`, `GET /api/pastes/:id/raw` | Fetch via API (public, no key) |
+| `GET /api/pastes/:id`, `GET /api/pastes/:id/raw` | Fetch via API (public, no key). `401` while a protected paste is locked |
+| `POST /api/pastes/:id/unlock` | Scriptable unlock: verifies the passphrase, returns the same `HttpOnly` cookie (`401` on a wrong passphrase, `429` when rate limited) |
 | `GET /api/pastes/mine`, `PATCH /api/pastes/:id`, `DELETE /api/pastes/:id` | Key-gated management |
 | `/app.css`, `/app.js`, `/robots.txt` | Static files served by Cloudflare Assets |
 | `/favicon.svg`, `/logo.svg`, `/mark.svg` | Brand assets, generated from one source (`src/assets/mark.js`) |
@@ -96,6 +99,7 @@ values — `npm run dev` then uses the real database.
 - Paste IDs: 8 random base62 characters (`/p/a8Kx92Lm`) — no sequential ids, no custom slugs.
 - Expirations: 10 min, 1 h, 6 h, 1 day, 1 week, 30 days, 1 year, **never**. Expired rows are deleted.
 - Titles: required, ≤ 120 chars. Usernames: 4–6 letters/digits. Passwords: ≥ 8 chars, PBKDF2-SHA256 (100k — the Cloudflare Workers ceiling).
+- Paste passphrases (optional): ≥ 6 chars, ≤ 256, stored only as a PBKDF2-SHA256 hash with a per-paste salt. Unlocking lasts 30 minutes in an `HttpOnly; SameSite=Lax` cookie, and is capped at 10 attempts / 15 min per paste + IP (`429` + `Retry-After`).
 - View counts dedupe repeat visitors per paste for 6 hours (IPs stored only as HMAC hashes).
 - Reads via API: 3000/hour per IP. Auth endpoints: 40/15 min per IP. All limits are abuse guards, not quotas.
 - Highlighting + linkification are skipped above 256 KB so huge pastes render instantly; `/raw` always returns exact bytes.
@@ -112,21 +116,48 @@ MantisBin 2.1 keeps the minimal, unlisted-paste model while improving the daily 
 - **Native sharing:** the Share control uses the browser Web Share API when available and falls back to copying the canonical paste URL. It never sends content to a third-party sharing service.
 - **CSP cleanup:** share/key inputs use `public/app.js` event listeners instead of inline `onclick` handlers, preserving the strict Content Security Policy.
 
-The 2.1 test suite contains 39 end-to-end and unit tests. Run `npm test`, `npm run typecheck`, and `npm run build` before deployment.
+The 2.1 test suite contains 39 end-to-end and unit tests (65 after the 2.2 §1 work). Run `npm test`, `npm run typecheck`, and `npm run build` before deployment.
 
-### MantisBin 2.2 — planned scope for the next development chat
+### MantisBin 2.2 — shipped one feature at a time
 
-This is the source of truth for the planned 2.2 work. Keep the product private, unlisted, dependency-light, and usable without JavaScript wherever practical. Do not add a public feed, global search, trending page, comments, or social discovery as part of 2.2.
+This is the source of truth for the 2.2 work. Keep the product private, unlisted, dependency-light, and usable without JavaScript wherever practical. Do not add a public feed, global search, trending page, comments, or social discovery as part of 2.2.
 
-#### 1. Password-protected pastes
+| # | Feature | Status |
+| --- | --- | --- |
+| 1 | Password-protected pastes | **shipped** |
+| 2 | Burn-after-reading pastes | planned |
+| 3 | Fork / duplicate paste | planned |
+| 4 | Optional automatic language detection | planned |
+| 5 | QR sharing | planned |
 
-- Anonymous users can optionally set a passphrase while creating a paste; accounts and API clients can use it too.
+#### 1. Password-protected pastes — shipped
+
+Implementation notes:
+
+- Stored as `pastes.password_hash` (`ALTER TABLE` migration, appended to `MIGRATIONS`
+  in `src/db/schema.js`, so existing databases upgrade on the next cold start).
+- Policy (documented in `/docs` too): before unlock a visitor only sees
+  "this paste is password-protected" plus safe metadata — paste id, created/expiry
+  timestamps and the view count. The title counts as content and is hidden.
+  The web view answers `200` with the unlock screen; `/p/:id/raw`, the API JSON
+  and the API raw endpoint answer `401` and never include a paste object.
+- Unlock proof is a stateless `HMAC-SHA256(APP_SECRET)` token over
+  `pasteId | expiry` in an `mb_unlock` `HttpOnly; SameSite=Lax` cookie
+  (30 minutes, up to 3 pastes at once) — no new table, no session row.
+- `POST /p/:id/unlock` (HTML form, no JS needed) and `POST /api/pastes/:id/unlock`
+  (JSON, returns the cookie for `curl -c`) share one rate-limit bucket:
+  `unlock:<pasteId>:<ip>`, 10 attempts / 15 min, `429` + `Retry-After`.
+- Views are only counted after a successful unlock; ownership and expiry rules are
+  unchanged, and owners (session or their own API key) never need the passphrase.
+
+
+- Anonymous users can optionally set a passphrase while creating a paste; accounts and API clients can use it too. _Shipped: optional `password` field on the editor, `POST /api/pastes` and `PATCH /api/pastes/:id` (owners can add, replace or remove it while editing)._
 - Store only a secure password hash, never the passphrase or a passphrase in the URL.
 - The HTML view, normal raw endpoint, API JSON endpoint, and API raw endpoint must all require successful password verification before returning content.
 - Metadata that does not reveal content may be shown before unlock, but the title/content policy must be decided consistently across web and API responses.
 - Preserve normal expiration, unlisted/noindex behavior, safe headers, rate limits, and ownership rules.
 - Define a short-lived, HttpOnly unlock session/cookie so users do not re-enter the passphrase on every request; never expose the passphrase to client JavaScript.
-- Add brute-force protection and tests for correct password, wrong password, expired password-protected paste, raw/API access, and owner management.
+- Add brute-force protection and tests for correct password, wrong password, expired password-protected paste, raw/API access, and owner management. _Shipped: `tests/password.test.js` (14 end-to-end tests) + `tests/unlock.test.js` (9 unit tests)._
 
 #### 2. Burn-after-reading pastes
 
@@ -171,6 +202,14 @@ Add explicit expiration modes for temporary handoffs:
 
 Before calling 2.2 complete, update the API docs and README, add migration notes if the schema changes, add end-to-end and unit coverage for every new security-sensitive path, verify no secrets appear in URLs/logs/HTML, and run the full test, typecheck, and Worker dry-run build commands. Preserve the existing promise: **paste → save → share → copy**, with no noisy discovery layer.
 
+| Feature | Tests | README + `/docs` | Migration | Clean runs |
+| --- | --- | --- | --- | --- |
+| 1. Password-protected pastes | ✅ `tests/password.test.js`, `tests/unlock.test.js` | ✅ | ✅ `pastes.password_hash` | ✅ test / typecheck / build |
+| 2. Burn after reading | — | — | — | — |
+| 3. Fork / duplicate | — | — | — | — |
+| 4. Auto language detection | — | — | — | — |
+| 5. QR sharing | — | — | — | — |
+
 ## Architecture
 
 ```
@@ -182,7 +221,8 @@ src/
     schema.js        SQLite schema (users, sessions, pastes, api_keys, paste_views, rate_limits)
     turso.js         libSQL adapter (Workers) — the only runtime dependency (@libsql/client)
     node-sqlite.js   Node built-in SQLite adapter (dev + tests), same SQL
-  lib/               crypto, auth/sessions/keys, pastes, ratelimit, highlighter, html, http, maintenance
+  lib/               crypto, auth/sessions/keys, pastes, access (read authorisation),
+                     unlock (passphrase + signed unlock cookie), ratelimit, highlighter, html, http, maintenance
   routes/            web.js (HTML forms) + api.js (JSON)
   views/             server-rendered pages (escaping-by-construction tagged templates)
   assets/mark.js     the mantis mark: one geometry, reused as inline SVG, favicon, logo
@@ -204,6 +244,22 @@ Design rules the codebase follows:
 
 ## Security notes
 
+- Paste passphrases: never stored, never echoed and never put in a URL — the
+  database keeps a PBKDF2-SHA256 hash (`pbkdf2-sha256$<iters>$<salt>$<hash>`)
+  with a per-paste salt, using the same 100 000-iteration ceiling as accounts.
+  The HTML view, `/p/:id/raw`, `/api/pastes/:id` and `/api/pastes/:id/raw` all
+  refuse to serve anything before verification; a wrong passphrase, a `401`, a
+  `404` or a rate-limited attempt never counts as a view and never unlocks.
+- Unlock sessions: an HMAC-SHA256 (`APP_SECRET`) signed token in an `HttpOnly;
+  SameSite=Lax` cookie, valid for 30 minutes and bound to one paste id, so a
+  token cannot be moved to another paste or forged. Up to 3 pastes stay
+  unlocked at once; no extra table is involved.
+- What a locked paste shows: the paste id, its created/expiry timestamps and
+  its view count — never the title, language, font, size or content (a
+  protected paste's title is content). The API returns `401` with an error
+  message and no paste object at all.
+- Owners (the signed-in account that created the paste, or that account's API
+  key) read, edit and delete their own protected pastes without the passphrase.
 - Passwords: PBKDF2-HMAC-SHA256, 100 000 iterations (the Cloudflare Workers ceiling —
   `deriveBits` throws `NotSupportedError` above it), per-user salt; constant-time compares.
   The iteration count is stored inside every hash, so it can be tuned without locking anyone out.

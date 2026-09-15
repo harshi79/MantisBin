@@ -1,6 +1,6 @@
 /** Lightweight, single-page API documentation. No portal, no SDKs. */
 
-import { EXPIRATIONS, LANGUAGES, LIMITS, RATE_LIMITS, SITE } from '../config.js';
+import { EXPIRATIONS, LANGUAGES, LIMITS, RATE_LIMITS, SITE, UNLOCK_TTL_SECONDS } from '../config.js';
 import { html } from '../lib/html.js';
 import { formatBytes } from '../lib/validate.js';
 import { layout } from './layout.js';
@@ -49,6 +49,7 @@ X-API-Key: mb_…</code></pre>
           <tr><td><code>language</code></td><td>string</td><td>optional, default <code>plaintext</code> (manual selection only)</td></tr>
           <tr><td><code>font</code> / <code>fontSize</code></td><td>string / number</td><td>optional viewer preferences</td></tr>
           <tr><td><code>expiresIn</code></td><td>string</td><td>optional: ${expirationOptions}; default <code>1w</code></td></tr>
+          <tr><td><code>password</code></td><td>string</td><td>optional: ${LIMITS.passphraseMin}–${LIMITS.passphraseMax} chars; the paste is locked until it is entered</td></tr>
         </tbody>
       </table>
       <pre><code>curl -sS -X POST ${base}/api/pastes \\
@@ -75,6 +76,48 @@ X-API-Key: mb_…</code></pre>
       <div class="endpoint"><span class="method method-get">GET</span> <code>/api/meta</code> <span class="muted small">— languages, fonts, expirations and limits (public)</span></div>
       <div class="endpoint"><span class="method method-get">GET</span> <code>/api/health</code> <span class="muted small">— liveness probe (public)</span></div>
 
+      <h2 id="protected">Password-protected pastes</h2>
+      <p>
+        Send <code>password</code> when creating a paste and the paste is locked: reading it requires the
+        passphrase. Only a PBKDF2-SHA256 hash (100 000 iterations, per-paste salt) is stored — never the
+        passphrase, and never anything derived from it in a URL, in HTML, in a log line or in a response body.
+      </p>
+      <pre><code>curl -sS -X POST ${base}/api/pastes \\
+  -H "Authorization: Bearer $MANTISBIN_KEY" \\
+  -H "Content-Type: application/json" \\
+  -d '{"title":"handover","content":"…","password":"correct-horse-battery-staple","expiresIn":"1d"}'</code></pre>
+
+      <div class="endpoint"><span class="method">POST</span> <code>/api/pastes/:id/unlock</code> <span class="muted small">— verify the passphrase (public)</span></div>
+      <pre><code>curl -sS -c jar.txt -X POST ${base}/api/pastes/a8Kx92Lm/unlock \\
+  -H "Content-Type: application/json" \\
+  -d '{"password":"correct-horse-battery-staple"}'
+# {"unlocked":true,"id":"a8Kx92Lm","expiresAt":"…"}
+
+curl -sS -b jar.txt ${base}/api/pastes/a8Kx92Lm        # now returns the paste
+curl -sS -b jar.txt ${base}/api/pastes/a8Kx92Lm/raw    # and the raw bytes</code></pre>
+      <p>
+        The unlock is a signed <code>HttpOnly; SameSite=Lax</code> cookie valid for
+        ${Math.round(UNLOCK_TTL_SECONDS / 60)} minutes and bound to that one paste id, so it cannot be copied to
+        another paste. Browsers get the same thing from the form at <code>/p/:id</code> — the paste page needs no
+        JavaScript to unlock. Up to 3 pastes stay unlocked at once, and no passphrase ever appears in a URL.
+      </p>
+      <table class="spec">
+        <thead><tr><th>Situation</th><th>Status</th><th>Body</th></tr></thead>
+        <tbody>
+          <tr><td><code>GET /p/:id</code>, locked</td><td><code>200</code></td><td>HTML unlock screen: “this paste is password-protected” + safe metadata (id, created/expiry, views, unlisted). No title, no content.</td></tr>
+          <tr><td><code>GET /p/:id/raw</code>, locked</td><td><code>401</code></td><td>Plain text explaining where to unlock. Zero bytes of content.</td></tr>
+          <tr><td><code>GET /api/pastes/:id</code> and <code>/raw</code>, locked</td><td><code>401</code></td><td><code>{ "error": … }</code> only — no paste object, not even the title.</td></tr>
+          <tr><td>Wrong passphrase</td><td><code>401</code></td><td><code>{ "error": "Wrong passphrase." }</code> (web: the unlock screen). No cookie is issued.</td></tr>
+          <tr><td>Too many attempts</td><td><code>429</code></td><td>${RATE_LIMITS.unlock.limit} attempts / ${Math.round(RATE_LIMITS.unlock.window / 60)} min per paste + IP, with <code>Retry-After</code>.</td></tr>
+          <tr><td>Owner (session cookie, or the account's API key)</td><td><code>200</code></td><td>Full access without the passphrase — the same account can always edit and delete its own paste.</td></tr>
+        </tbody>
+      </table>
+      <p>
+        <code>PATCH /api/pastes/:id</code> manages the lock: omit <code>password</code> to keep it, send a new
+        string to replace it, or send <code>null</code> to remove it. Paste objects carry a
+        <code>protected</code> boolean, so clients can tell before asking for content.
+      </p>
+
       <h2 id="shape">Paste object</h2>
       <pre><code>{
   "id": "a8Kx92Lm",
@@ -89,6 +132,7 @@ X-API-Key: mb_…</code></pre>
   "createdAt": "2026-09-14T10:12:00.000Z",
   "updatedAt": "2026-09-14T10:12:00.000Z",
   "expiresAt": "2026-09-15T10:12:00.000Z",
+  "protected": false,
   "content": "ok\\nreally ok"
 }</code></pre>
       <p>List endpoints omit <code>content</code>. Timestamps are ISO 8601 UTC; <code>expiresAt</code> is <code>null</code> for “never”.</p>
@@ -108,7 +152,8 @@ X-API-Key: mb_…</code></pre>
         <li>Paste IDs are ${LIMITS.idLength} random base62 characters; there are no custom URLs and no sequential ids.</li>
         <li>Create (web): ${RATE_LIMITS.create.limit}/hour per IP or account. Create (API): ${RATE_LIMITS.apiCreate.limit}/hour per key.</li>
         <li>Reads (API): ${RATE_LIMITS.apiRead.limit}/hour per IP. Auth endpoints: ${RATE_LIMITS.auth.limit}/${Math.round(RATE_LIMITS.auth.window / 60)} min per IP.</li>
-        <li>View counts ignore repeat refreshes from the same visitor within 6 hours.</li>
+        <li>Paste passphrases: ${LIMITS.passphraseMin}–${LIMITS.passphraseMax} characters, stored as a PBKDF2-SHA256 hash. Unlocking lasts ${Math.round(UNLOCK_TTL_SECONDS / 60)} minutes and is capped at ${RATE_LIMITS.unlock.limit} attempts / ${Math.round(RATE_LIMITS.unlock.window / 60)} min per paste + IP.</li>
+        <li>View counts ignore repeat refreshes from the same visitor within 6 hours; a locked paste is never counted until it is unlocked.</li>
       </ul>
 
       <h2 id="languages">Languages</h2>

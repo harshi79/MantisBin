@@ -29,6 +29,14 @@ export const LIMITS = {
   usernameMin: 4,
   usernameMax: 6,
   passwordMin: 8,
+  /**
+   * Optional per-paste passphrase (2.2 §1). Short codes get handed out over
+   * chat, so the floor is 6 rather than the 8 used for accounts; brute force is
+   * stopped by the unlock rate limit, not by the character count. Same 256
+   * character ceiling as accounts so PBKDF2 work stays bounded.
+   */
+  passphraseMin: 6,
+  passphraseMax: 256,
   /** Paste ID length (base62). */
   idLength: 8,
 };
@@ -116,6 +124,11 @@ export const RATE_LIMITS = {
   apiRead: { limit: 3000, window: 3600 },
   /** Login + registration attempts (per IP). */
   auth: { limit: 40, window: 900 },
+  /**
+   * Wrong/attempted passphrase unlocks of one paste from one IP. The bucket key
+   * carries both, so hammering one paste cannot lock a visitor out of another.
+   */
+  unlock: { limit: 10, window: 900 },
 };
 
 /** Sessions last 30 days and slide forward on activity. */
@@ -123,9 +136,16 @@ export const SESSION_TTL_SECONDS = 30 * 24 * 3600;
 /** Re-issue a session cookie when less than this much lifetime remains. */
 export const SESSION_REFRESH_SECONDS = 7 * 24 * 3600;
 
+/** How long a successful paste unlock lasts (cookie + signed token). */
+export const UNLOCK_TTL_SECONDS = 30 * 60;
+/** At most this many unlocked pastes are remembered in one browser. */
+export const UNLOCK_MAX_TOKENS = 3;
+
 export const COOKIE = {
   session: 'mb_session',
   theme: 'mb_theme',
+  /** Signed, paste-scoped unlock proof — never readable from client JS. */
+  unlock: 'mb_unlock',
 };
 
 /** A view only counts once per IP per paste within this window. */
