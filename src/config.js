@@ -94,8 +94,9 @@ export const FONT_SIZES = [12, 13, 14, 15, 16, 18, 20];
 export const DEFAULT_FONT_SIZE = 14;
 
 /**
- * Supported languages (manual selection only — no auto-detection).
- * `plaintext` renders escaped text with no tokens.
+ * Supported languages. `plaintext` renders escaped text with no tokens. The
+ * editor's `Auto detect` sentinel is kept separate so it can never be stored
+ * in a paste row or accidentally handed to the highlighter.
  */
 export const LANGUAGES = [
   { id: 'plaintext', label: 'Plain text' },
@@ -128,6 +129,11 @@ export const LANGUAGES = [
 ];
 
 export const DEFAULT_LANGUAGE = 'plaintext';
+export const AUTO_LANGUAGE = 'auto';
+/** Form/API choices: `auto` is an input instruction, never a stored language. */
+export const LANGUAGE_OPTIONS = [{ id: AUTO_LANGUAGE, label: 'Auto detect' }, ...LANGUAGES];
+/** Auto detection never examines more than this prefix. */
+export const LANGUAGE_DETECT_MAX_BYTES = 64 * 1024;
 
 /**
  * Rate limits — deliberately generous, they exist only to stop obvious abuse.

@@ -182,7 +182,7 @@ This is the source of truth for the 2.2 work. Keep the product private, unlisted
 | 1 | Password-protected pastes | **shipped** |
 | 2 | Burn-after-reading pastes | **shipped** |
 | 3 | Fork / duplicate paste | **shipped** |
-| 4 | Optional automatic language detection | planned |
+| 4 | Optional automatic language detection | **shipped** |
 | 5 | QR sharing | planned |
 
 #### 1. Password-protected pastes — shipped
@@ -273,14 +273,23 @@ Implementation notes:
 - Do not let duplication bypass size limits, rate limits, password protection, or burn-after-reading rules.
 - Decide and document whether protected/burn-on-read sources require unlocking before copying; default should be to require unlock and never copy content from a failed/partial read. _Shipped: both require it — a locked source answers `401` (API) or the unlock screen (web), and a one-time source is consumed by the copy._
 
-#### 4. Optional automatic language detection
+#### 4. Optional automatic language detection — shipped
 
-- Add an `Auto detect` option while retaining manual language selection and the current safe plaintext fallback.
-- Detect common formats such as JSON, YAML, Markdown, JavaScript/TypeScript, Python, shell, SQL, HTML/XML, CSS, and diff without executing or importing untrusted code.
-- Store the resolved language with the paste so later views are deterministic.
-- Manual selection always wins over detection.
-- API clients can request auto detection explicitly and receive the resolved language in the response.
-- Detection must be bounded by the existing size/performance limits and covered by ambiguous-input tests.
+Implementation notes:
+
+- The editor adds an `Auto detect` choice and the API accepts `language: "auto"`.
+  Manual language ids always win; `auto` is an input instruction and is never
+  stored in `pastes.language`.
+- `src/lib/detect.js` uses bounded, dependency-free fingerprints for JSON, YAML,
+  Markdown, shell, SQL, HTML/XML, CSS, diff and common programming languages.
+  It parses at most a 64 KiB prefix, never executes or imports paste content, and
+  reuses the existing 256 KiB highlight fast-path by resolving very large pastes
+  to `plaintext`.
+- The resolved language is written at creation/update time, so every later view
+  and API response is deterministic. Ties and weak signals deliberately fall
+  back to `plaintext`.
+- `tests/detect.test.js` covers clear formats, ambiguous input, manual overrides,
+  the web form, API responses, large-input bounds and deterministic storage.
 
 #### 5. QR sharing
 
@@ -300,7 +309,7 @@ Before calling 2.2 complete, update the API docs and README, add migration notes
 | 1. Password-protected pastes | ✅ `tests/password.test.js`, `tests/unlock.test.js` | ✅ | ✅ `pastes.password_hash` | ✅ test / typecheck / build |
 | 2. Burn after reading | ✅ `tests/burn.test.js` (13) | ✅ | ✅ `pastes.burn_mode`, `pastes.burned` | ✅ test / typecheck / build |
 | 3. Fork / duplicate | ✅ `tests/fork.test.js` (11) | ✅ | none (no schema change) | ✅ test / typecheck / build |
-| 4. Auto language detection | — | — | — | — |
+| 4. Auto language detection | ✅ `tests/detect.test.js` | ✅ | none | ✅ test / typecheck / build |
 | 5. QR sharing | — | — | — | — |
 
 ## Architecture
@@ -315,7 +324,7 @@ src/
     turso.js         libSQL adapter (Workers) — the only runtime dependency (@libsql/client)
     node-sqlite.js   Node built-in SQLite adapter (dev + tests), same SQL
   lib/               crypto, auth/sessions/keys, pastes, access (read authorisation),
-                     unlock (passphrase + signed unlock cookie), ratelimit, highlighter, html, http, maintenance
+                     unlock (passphrase + signed unlock cookie), ratelimit, detect, highlighter, html, http, maintenance
   routes/            web.js (HTML forms) + api.js (JSON)
   views/             server-rendered pages (escaping-by-construction tagged templates)
   assets/mark.js     the mantis mark: one geometry, reused as inline SVG, favicon, logo

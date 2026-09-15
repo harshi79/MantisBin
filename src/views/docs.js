@@ -1,6 +1,6 @@
 /** Lightweight, single-page API documentation. No portal, no SDKs. */
 
-import { BURN_MODES, EXPIRATIONS, LANGUAGES, LIMITS, RATE_LIMITS, SITE, UNLOCK_TTL_SECONDS } from '../config.js';
+import { BURN_MODES, EXPIRATIONS, LANGUAGE_OPTIONS, LIMITS, RATE_LIMITS, SITE, UNLOCK_TTL_SECONDS } from '../config.js';
 import { html } from '../lib/html.js';
 import { formatBytes } from '../lib/validate.js';
 import { layout } from './layout.js';
@@ -46,7 +46,7 @@ X-API-Key: mb_…</code></pre>
         <tbody>
           <tr><td><code>title</code></td><td>string</td><td>required, 1–${LIMITS.titleMax} chars</td></tr>
           <tr><td><code>content</code></td><td>string</td><td>required, ≤ ${formatBytes(LIMITS.userMaxBytes)} with a key</td></tr>
-          <tr><td><code>language</code></td><td>string</td><td>optional, default <code>plaintext</code> (manual selection only)</td></tr>
+          <tr><td><code>language</code></td><td>string</td><td>optional: a stored language id or <code>auto</code>; manual selection wins and auto resolves once at creation</td></tr>
           <tr><td><code>font</code> / <code>fontSize</code></td><td>string / number</td><td>optional viewer preferences</td></tr>
           <tr><td><code>expiresIn</code></td><td>string</td><td>optional: ${expirationOptions}; default <code>1w</code></td></tr>
           <tr><td><code>password</code></td><td>string</td><td>optional: ${LIMITS.passphraseMin}–${LIMITS.passphraseMax} chars; the paste is locked until it is entered</td></tr>
@@ -230,7 +230,7 @@ curl -sS ${base}/api/pastes/a8Kx92Lm        # 404 — it is gone</code></pre>
       </ul>
 
       <h2 id="languages">Languages</h2>
-      <p>Highlighting is manual — send one of: <code>${LANGUAGES.map((l) => l.id).join(', ')}</code>.</p>
+      <p>Send one of the stored language ids: <code>${LANGUAGE_OPTIONS.filter((l) => l.id !== 'auto').map((l) => l.id).join(', ')}</code>. The editor and API also accept <code>auto</code>; detection is bounded to the first 64 KiB and stores the resolved language, while ambiguous or very large input becomes <code>plaintext</code>.</p>
 
       <h2 id="privacy">Privacy</h2>
       <p>

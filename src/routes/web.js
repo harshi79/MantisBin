@@ -44,7 +44,7 @@ import {
   normalizeExpiration,
   normalizeFont,
   normalizeFontSize,
-  normalizeLanguage,
+  normalizeLanguageChoice,
   safeFilename,
   validateBurnMode,
   validateContent,
@@ -62,6 +62,7 @@ import {
   visitorHash,
 } from '../lib/pastes.js';
 import { consume } from '../lib/ratelimit.js';
+import { detectLanguage } from '../lib/detect.js';
 import { RATE_LIMITS } from '../config.js';
 import { editorPage } from '../views/editor.js';
 import { pastePage } from '../views/paste.js';
@@ -126,7 +127,8 @@ function readPasteInput(form, user, mode = 'create') {
   if (!title.ok) errors.push(title.error);
   const content = validateContent(form.content, maxBytesFor(user));
   if (!content.ok) errors.push(content.error);
-  const language = normalizeLanguage(form.language);
+  const languageChoice = normalizeLanguageChoice(form.language);
+  const language = languageChoice === 'auto' && content.ok ? detectLanguage(content.value, content.bytes) : languageChoice;
   const font = normalizeFont(form.font);
   const fontSize = normalizeFontSize(form.font_size ?? form.fontSize);
   const expiration = normalizeExpiration(form.expiration ?? form.expiresIn);
@@ -134,7 +136,18 @@ function readPasteInput(form, user, mode = 'create') {
   if (passphrase.error) errors.push(passphrase.error);
   const burnMode = validateBurnMode(form.burn_after);
   if (!burnMode.ok) errors.push(burnMode.error);
-  return { errors, title: title.ok ? title.value : String(form.title ?? '').slice(0, 200), content: content.ok ? content.value : String(form.content ?? ''), language, font, fontSize, expiration, passphrase: passphrase.state, burnMode: burnMode.ok ? burnMode.value : DEFAULT_BURN_MODE };
+  return {
+    errors,
+    title: title.ok ? title.value : String(form.title ?? '').slice(0, 200),
+    content: content.ok ? content.value : String(form.content ?? ''),
+    language,
+    languageChoice,
+    font,
+    fontSize,
+    expiration,
+    passphrase: passphrase.state,
+    burnMode: burnMode.ok ? burnMode.value : DEFAULT_BURN_MODE,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -182,7 +195,7 @@ export async function create(ctx) {
       values: {
         title: input.title,
         content: cleanText(form.content ?? ''),
-        language: input.language,
+        language: input.languageChoice,
         font: input.font,
         font_size: input.fontSize,
         expiration: input.expiration.id,
@@ -451,7 +464,7 @@ export async function editSave(ctx, params) {
       values: {
         title: input.title || full?.title || '',
         content: cleanText(form.content ?? ''),
-        language: input.language,
+        language: input.languageChoice,
         font: input.font,
         font_size: input.fontSize,
         expiration: input.expiration.id,
