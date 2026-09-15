@@ -8,12 +8,15 @@
  *   DELETE /api/pastes/:id      delete own (API key)
  *   GET    /api/pastes/:id/raw  raw text (public)
  *   POST   /api/pastes/:id/unlock  unlock a password-protected paste (public)
+ *   (both reads consume a burn-after-reading paste in `read` mode)
  *   GET    /api/meta            vocabularies + limits (public)
  *   GET    /api/health          liveness (public)
  */
 
 import {
+  BURN_MODES,
   COOKIE,
+  DEFAULT_BURN_MODE,
   EXPIRATIONS,
   FONTS,
   FONT_SIZES,
@@ -26,6 +29,7 @@ import {
 } from '../config.js';
 import { authenticateApiKey } from '../lib/auth.js';
 import { appSecret, canReadPaste } from '../lib/access.js';
+import { burnModeOf, claimBurnForRead } from '../lib/burn.js';
 import { HttpError, jsonResponse, parseJson, readBody, textResponse } from '../lib/http.js';
 import { consume } from '../lib/ratelimit.js';
 import {
@@ -44,6 +48,7 @@ import {
   normalizeFontSize,
   normalizeLanguage,
   safeFilename,
+  validateBurnMode,
   validateContent,
   validatePassphrase,
   validateTitle,
@@ -79,6 +84,8 @@ export function serializePaste(paste, origin, options = {}) {
     expiresAt: iso(paste.expires_at),
     /** True when reading the paste requires an unlocked passphrase. */
     protected: isProtected(paste),
+    /** 'never' | 'view' | 'read' — a one-time paste is deleted as it is served. */
+    burnAfter: burnModeOf(paste),
   };
   if (options.content) base.content = paste.content;
   return base;
@@ -153,6 +160,8 @@ export async function meta(ctx) {
       passphraseMin: LIMITS.passphraseMin,
       passphraseMax: LIMITS.passphraseMax,
     },
+    burnModes: BURN_MODES.map((mode) => ({ id: mode.id, label: mode.label })),
+    defaultBurnMode: DEFAULT_BURN_MODE,
     unlock: {
       seconds: UNLOCK_TTL_SECONDS,
       maxRemembered: UNLOCK_MAX_TOKENS,
@@ -179,6 +188,8 @@ export async function create(ctx) {
 
   const expiration = normalizeExpiration(body.expiresIn ?? body.expiration);
   // `password` (camelcase JSON) or `passphrase`; empty/omitted means no lock.
+  const burnAfter = validateBurnMode(body.burnAfter ?? body.burn_after);
+  if (!burnAfter.ok) throw new HttpError(400, burnAfter.error);
   const passphrase = readPasswordInput(body);
   let passwordHash = null;
   if (passphrase.value !== undefined && passphrase.value !== null && passphrase.value !== '') {
@@ -195,6 +206,7 @@ export async function create(ctx) {
     expiresAt: expiration.expiresAt,
     userId: auth.user.id,
     passwordHash,
+    burnMode: burnAfter.value,
     now: ctx.now,
   });
 
@@ -221,7 +233,14 @@ export async function get(ctx, params) {
   if (!paste) throw new HttpError(404, 'Paste not found, expired or deleted.');
   // Nothing about a protected paste leaks here — not even the title.
   if (!(await canReadPaste(ctx, paste)) && !(await apiKeyOwnsPaste(ctx, paste))) throw protectedError();
+  // Burn-after-reading in `read` mode: a JSON read consumes the paste too.
+  if (!(await claimBurnForRead(ctx.db, paste, 'read'))) throw burnedAway();
   return jsonResponse(serializePaste(paste, ctx.url.origin, { content: true }), 200, {}, { noindex: true });
+}
+
+/** 404 for a one-time paste that another concurrent read already consumed. */
+function burnedAway() {
+  return new HttpError(404, 'Paste not found, expired or deleted.');
 }
 
 /** 401 for every JSON route that refuses to serve a locked paste. Empty body. */
@@ -281,6 +300,7 @@ export async function raw(ctx, params) {
   const paste = await getPaste(ctx.db, params.id, { content: true, now: ctx.now });
   if (!paste) throw new HttpError(404, 'Paste not found, expired or deleted.');
   if (!(await canReadPaste(ctx, paste)) && !(await apiKeyOwnsPaste(ctx, paste))) throw protectedError();
+  if (!(await claimBurnForRead(ctx.db, paste, 'read'))) throw burnedAway();
   return textResponse(
     paste.content,
     200,
@@ -312,6 +332,15 @@ export async function update(ctx, params) {
       ? { expiresAt: existing.expires_at }
       : normalizeExpiration(body.expiresIn ?? body.expiration);
 
+  // Key presence again: `burnAfter: null` (or "never") clears the mode, an
+  // absent field keeps whatever the paste already has.
+  const burnAfter = Object.hasOwn(body, 'burnAfter')
+    ? validateBurnMode(body.burnAfter)
+    : Object.hasOwn(body, 'burn_after')
+      ? validateBurnMode(body.burn_after)
+      : { ok: true, value: undefined };
+  if (!burnAfter.ok) throw new HttpError(400, burnAfter.error);
+
   // `password: null` removes the protection, a string replaces it, absent keeps it.
   const passphrase = readPasswordInput(body);
   let passwordHash;
@@ -337,6 +366,7 @@ export async function update(ctx, params) {
       fontSize: normalizeFontSize(body.fontSize ?? body.font_size ?? existing.font_size),
       expiresAt: expiration.expiresAt,
       passwordHash,
+      burnMode: burnAfter.value,
     },
     ctx.now,
   );

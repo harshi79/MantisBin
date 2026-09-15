@@ -43,7 +43,11 @@ export const SCHEMA = [
     updated_at    INTEGER NOT NULL,
     expires_at    INTEGER,
     -- Optional passphrase: only ever the PBKDF2 hash, never the passphrase.
-    password_hash TEXT
+    password_hash TEXT,
+    -- Burn after reading (2.2 §2): 'never' | 'view' | 'read', plus the flag that
+    -- arbitrates the single allowed read between concurrent requests.
+    burn_mode     TEXT    NOT NULL DEFAULT 'never',
+    burned        INTEGER NOT NULL DEFAULT 0
   )`,
   // Listing a user's pastes, newest first.
   `CREATE INDEX IF NOT EXISTS idx_pastes_user_created ON pastes (user_id, created_at DESC)`,
@@ -89,6 +93,9 @@ export const SCHEMA = [
 const MIGRATIONS = [
   // 2.2 §1 — optional per-paste passphrase.
   { table: 'pastes', column: 'password_hash', sql: 'ALTER TABLE pastes ADD COLUMN password_hash TEXT' },
+  // 2.2 §2 — burn after reading.
+  { table: 'pastes', column: 'burn_mode', sql: "ALTER TABLE pastes ADD COLUMN burn_mode TEXT NOT NULL DEFAULT 'never'" },
+  { table: 'pastes', column: 'burned', sql: 'ALTER TABLE pastes ADD COLUMN burned INTEGER NOT NULL DEFAULT 0' },
 ];
 
 function isDuplicateColumn(error) {

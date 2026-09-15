@@ -4,7 +4,7 @@
  * through one of these functions.
  */
 
-import { DEFAULT_EXPIRATION, DEFAULT_FONT, DEFAULT_FONT_SIZE, DEFAULT_LANGUAGE, EXPIRATIONS, FONTS, FONT_SIZES, LANGUAGES, LIMITS } from '../config.js';
+import { BURN_MODES, DEFAULT_BURN_MODE, DEFAULT_EXPIRATION, DEFAULT_FONT, DEFAULT_FONT_SIZE, DEFAULT_LANGUAGE, EXPIRATIONS, FONTS, FONT_SIZES, LANGUAGES, LIMITS } from '../config.js';
 
 const encoder = new TextEncoder();
 
@@ -101,6 +101,31 @@ export function validatePassphrase(value) {
     return { ok: false, error: `Passphrase must be ${LIMITS.passphraseMax} characters or fewer.` };
   }
   return { ok: true, value };
+}
+
+/**
+ * Burn-after-reading mode (2.2 §2). Unlike an unknown language or font, an
+ * unknown burn mode is a hard error: silently downgrading "burn after reading"
+ * to a permanent paste would be the exact opposite of what the caller asked for.
+ * An empty/missing value means the default (`never`).
+ * @returns {Result}
+ */
+export function validateBurnMode(value) {
+  if (value === undefined || value === null || value === '') {
+    return { ok: true, value: DEFAULT_BURN_MODE };
+  }
+  const id = typeof value === 'string' ? value.trim().toLowerCase() : '';
+  if (id && BURN_MODES.some((mode) => mode.id === id)) return { ok: true, value: id };
+  return {
+    ok: false,
+    error: `Unknown burn mode. Use one of: ${BURN_MODES.map((mode) => mode.id).join(', ')}.`,
+  };
+}
+
+/** Human-readable burn mode label ("Burn after the first view"). */
+export function burnModeLabel(value) {
+  const found = BURN_MODES.find((mode) => mode.id === value);
+  return found ? found.label : '';
 }
 
 /** Whitelist a language id. */

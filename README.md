@@ -9,6 +9,7 @@ A fast, minimal paste-sharing utility for plain text and code.
 - Unlisted pastes only: no feeds, no search, no discovery, `noindex` everywhere it matters
 - Manual syntax highlighting for 27 languages, rendered server-side (zero client JS needed to read a paste)
 - Optional password protection: a paste stays locked — title and content both hidden — until the passphrase is verified
+- Burn after reading: a one-time paste is deleted the moment it is first viewed (or first read, including `raw`/API)
 - Dark + light themes, system fonts only, no webfont/CDN requests
 - Public JSON API with key-gated writes
 - Built for **Cloudflare Workers + Cloudflare Assets**, backed by **Turso (libSQL/SQLite)**
@@ -26,7 +27,7 @@ The dev server runs the *exact same* application code as the production Worker,
 using Node 22's built-in SQLite (`.data/mantisbin.db`). No cloud account needed.
 
 ```bash
-npm test           # 65 end-to-end + unit tests (node:test)
+npm test           # 78 end-to-end + unit tests (node:test)
 npm run typecheck  # tsc --noEmit over JSDoc-typed JS
 npm run build      # wrangler deploy --dry-run (bundles the Worker + assets)
 npm run clean-expired   # manual expiration sweep
@@ -72,7 +73,7 @@ values — `npm run dev` then uses the real database.
 | --- | --- |
 | `GET /` | The editor. Title, language, font, size, expiration, paste, save. |
 | `POST /p` | Create a paste (form-encoded; works without JS) |
-| `GET /p/:id` | View a paste (public, unlisted, `noindex`). Shows the unlock screen when the paste is protected |
+| `GET /p/:id` | View a paste (public, unlisted, `noindex`). Shows the unlock screen when the paste is protected; consumes a burn-after-reading paste |
 | `POST /p/:id/unlock` | Verify a protected paste's passphrase, set the signed unlock cookie, redirect back to the paste |
 | `GET /p/:id/raw` | Exact bytes as `text/plain` — for `curl`, scripts, terminals (`?download=1` forces attachment) |
 | `GET/POST /p/:id/edit` | Edit **your own** paste (account required) |
@@ -90,6 +91,32 @@ values — `npm run dev` then uses the real database.
 
 ## Limits & behaviour
 
+### Burn after reading (2.2 §2)
+
+`expiration` and *burning* are separate: expiry is a deadline, burning is
+consumption. The creator picks one of three modes (`after reading` on the editor,
+`burnAfter` in the API):
+
+| Mode | Consumed by |
+| --- | --- |
+| `never` (default) | nothing — the paste lives until it expires |
+| `view` | the first successful HTML view (`GET /p/:id`) |
+| `read` | the first successful content read of any kind: HTML view, `/p/:id/raw`, `GET /api/pastes/:id`, `GET /api/pastes/:id/raw` |
+
+- Consumption is claimed with one atomic statement —
+  `UPDATE pastes SET burned = 1 WHERE id = ? AND burned = 0 AND burn_mode <> 'never'` —
+  so of any number of concurrent requests **exactly one** is served and every
+  other one gets the standard `404`. The winner deletes the row as it answers;
+  `runMaintenance` sweeps anything a crashed request left behind.
+- Only *successful* reads consume a paste: a lock screen, a wrong passphrase, a
+  `401`, a `404`, an expired paste, a rate-limited request or a failed unlock
+  never burns one.
+- A one-time paste is one-time for its owner too — the metadata badge warns about
+  it before the read.
+- The chosen mode is shown in the creator form, on the paste metadata, in the
+  unlock screen and as `burnAfter` in API responses — never together with content
+  that has not been unlocked.
+
 | | Anonymous | Account / API key |
 | --- | --- | --- |
 | Max paste size | 5 MB | 10 MB |
@@ -100,6 +127,7 @@ values — `npm run dev` then uses the real database.
 - Expirations: 10 min, 1 h, 6 h, 1 day, 1 week, 30 days, 1 year, **never**. Expired rows are deleted.
 - Titles: required, ≤ 120 chars. Usernames: 4–6 letters/digits. Passwords: ≥ 8 chars, PBKDF2-SHA256 (100k — the Cloudflare Workers ceiling).
 - Paste passphrases (optional): ≥ 6 chars, ≤ 256, stored only as a PBKDF2-SHA256 hash with a per-paste salt. Unlocking lasts 30 minutes in an `HttpOnly; SameSite=Lax` cookie, and is capped at 10 attempts / 15 min per paste + IP (`429` + `Retry-After`).
+- Burn modes: `never` (default), `view`, `read`. A burned paste is deleted, not archived — the winning read is the only read.
 - View counts dedupe repeat visitors per paste for 6 hours (IPs stored only as HMAC hashes).
 - Reads via API: 3000/hour per IP. Auth endpoints: 40/15 min per IP. All limits are abuse guards, not quotas.
 - Highlighting + linkification are skipped above 256 KB so huge pastes render instantly; `/raw` always returns exact bytes.
@@ -116,7 +144,7 @@ MantisBin 2.1 keeps the minimal, unlisted-paste model while improving the daily 
 - **Native sharing:** the Share control uses the browser Web Share API when available and falls back to copying the canonical paste URL. It never sends content to a third-party sharing service.
 - **CSP cleanup:** share/key inputs use `public/app.js` event listeners instead of inline `onclick` handlers, preserving the strict Content Security Policy.
 
-The 2.1 test suite contains 39 end-to-end and unit tests (65 after the 2.2 §1 work). Run `npm test`, `npm run typecheck`, and `npm run build` before deployment.
+The 2.1 test suite contains 39 end-to-end and unit tests (78 after the 2.2 §1–§2 work). Run `npm test`, `npm run typecheck`, and `npm run build` before deployment.
 
 ### MantisBin 2.2 — shipped one feature at a time
 
@@ -125,7 +153,7 @@ This is the source of truth for the 2.2 work. Keep the product private, unlisted
 | # | Feature | Status |
 | --- | --- | --- |
 | 1 | Password-protected pastes | **shipped** |
-| 2 | Burn-after-reading pastes | planned |
+| 2 | Burn-after-reading pastes | **shipped** |
 | 3 | Fork / duplicate paste | planned |
 | 4 | Optional automatic language detection | planned |
 | 5 | QR sharing | planned |
@@ -159,7 +187,26 @@ Implementation notes:
 - Define a short-lived, HttpOnly unlock session/cookie so users do not re-enter the passphrase on every request; never expose the passphrase to client JavaScript.
 - Add brute-force protection and tests for correct password, wrong password, expired password-protected paste, raw/API access, and owner management. _Shipped: `tests/password.test.js` (14 end-to-end tests) + `tests/unlock.test.js` (9 unit tests)._
 
-#### 2. Burn-after-reading pastes
+#### 2. Burn-after-reading pastes — shipped
+
+Implementation notes:
+
+- Two columns on `pastes` (`burn_mode`, `burned`), added through the same
+  append-only migration list; existing rows default to `never`/`0`, so nothing
+  starts burning on upgrade.
+- `src/lib/burn.js` owns the rules: `shouldBurn()` decides per read kind
+  (`view` vs `read`), `claimBurn()` is the atomic exactly-once claim, and
+  `claimBurnForRead()` is called *after* the password/ownership gate in each of
+  the four read routes, so nothing that fails can consume a paste.
+- The winner deletes the row before the response is built (the response comes
+  from the row it already holds), so a one-time paste is unreachable in the
+  database the moment it is served. Losers get the standard `404`.
+- `pruneBurned()` runs inside the existing hourly `runMaintenance` — no new cron
+  — and `getPaste()` self-heals a stranded burned row on sight.
+- `tests/burn.test.js`: 13 tests covering the mode matrix, first-view burn,
+  five concurrent readers (exactly one `200` + one body), raw/API burning,
+  wrong passwords, lock screens, 429s, expired/missing ids, owner reads, edits,
+  the database-level claim and the maintenance sweep.
 
 Add explicit expiration modes for temporary handoffs:
 
@@ -168,7 +215,7 @@ Add explicit expiration modes for temporary handoffs:
 - A failed request, wrong password, rate-limited request, or 404 must not burn the paste.
 - Deletion and view delivery must be coordinated so concurrent requests cannot both receive a supposed one-time paste.
 - Show the selected burn behavior in the creator form and paste metadata without exposing secret content.
-- Add database, concurrency, web, raw, API, and maintenance tests.
+- Add database, concurrency, web, raw, API, and maintenance tests. _Shipped: `tests/burn.test.js`._
 
 #### 3. Fork / duplicate paste
 
@@ -205,7 +252,7 @@ Before calling 2.2 complete, update the API docs and README, add migration notes
 | Feature | Tests | README + `/docs` | Migration | Clean runs |
 | --- | --- | --- | --- | --- |
 | 1. Password-protected pastes | ✅ `tests/password.test.js`, `tests/unlock.test.js` | ✅ | ✅ `pastes.password_hash` | ✅ test / typecheck / build |
-| 2. Burn after reading | — | — | — | — |
+| 2. Burn after reading | ✅ `tests/burn.test.js` (13) | ✅ | ✅ `pastes.burn_mode`, `pastes.burned` | ✅ test / typecheck / build |
 | 3. Fork / duplicate | — | — | — | — |
 | 4. Auto language detection | — | — | — | — |
 | 5. QR sharing | — | — | — | — |
@@ -260,6 +307,9 @@ Design rules the codebase follows:
   message and no paste object at all.
 - Owners (the signed-in account that created the paste, or that account's API
   key) read, edit and delete their own protected pastes without the passphrase.
+- One-time pastes: the claim is a single conditional `UPDATE`, so concurrent
+  readers cannot both be served; the row is then deleted, and a burned row is
+  unreadable even before the delete (both paths are covered by tests).
 - Passwords: PBKDF2-HMAC-SHA256, 100 000 iterations (the Cloudflare Workers ceiling —
   `deriveBits` throws `NotSupportedError` above it), per-user salt; constant-time compares.
   The iteration count is stored inside every hash, so it can be tuned without locking anyone out.

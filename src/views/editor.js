@@ -3,7 +3,7 @@
  * Shared by "new paste" and "edit paste".
  */
 
-import { EXPIRATIONS, FONTS, FONT_SIZES, LANGUAGES, LIMITS, SITE, UNLOCK_TTL_SECONDS } from '../config.js';
+import { BURN_MODES, EXPIRATIONS, FONTS, FONT_SIZES, LANGUAGES, LIMITS, SITE, UNLOCK_TTL_SECONDS } from '../config.js';
 import { html } from '../lib/html.js';
 import { formatBytes } from '../lib/validate.js';
 import { alertBox, layout } from './layout.js';
@@ -14,7 +14,7 @@ import { alertBox, layout } from './layout.js';
  *   mode: 'create' | 'edit',
  *   pasteId?: string,
  *   values: { title: string, content: string, language: string, font: string, font_size: number, expiration: string,
- *             protected?: boolean },
+ *             burn_after?: string, protected?: boolean },
  *   errors?: string[], okMessage?: string,
  *   maxBytes: number,
  * }} options
@@ -136,6 +136,18 @@ export function editorPage(options) {
             )}
           </select>
         </div>
+        <div class="field">
+          <label for="burn_after">After reading</label>
+          <select id="burn_after" name="burn_after" aria-describedby="burn-help">
+            ${BURN_MODES.map(
+              (mode) =>
+                html`<option value="${mode.id}" ${(values.burn_after ?? 'never') === mode.id ? html`selected` : ''}>${mode.label}</option>`,
+            )}
+          </select>
+        </div>
+        <p id="burn-help" class="muted small field-help">
+          A one-time paste is deleted for everyone — including you — as soon as it is read.
+        </p>
         <div class="spacer"></div>
         <span class="muted small">Tip: <kbd>Ctrl</kbd> + <kbd>Enter</kbd> saves</span>
         ${isEdit ? html`<a class="btn" href="/p/${options.pasteId}">Cancel</a>` : ''}

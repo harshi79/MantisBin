@@ -1,6 +1,7 @@
 /** My Pastes — the only page that lists anything, and it lists only your own. */
 
 import { LANGUAGES, SITE } from '../config.js';
+import { burnLabel } from '../lib/burn.js';
 import { html } from '../lib/html.js';
 import { formatBytes, formatDateTime, relativeTime } from '../lib/validate.js';
 import { alertBox, layout } from './layout.js';
@@ -34,6 +35,7 @@ export function myPastesPage(options) {
                 <span title="${formatDateTime(paste.created_at)}">${relativeTime(paste.created_at)}</span>
                 <span>${paste.views} ${paste.views === 1 ? 'view' : 'views'}</span>
                 ${paste.password_hash ? html`<span class="badge">password-protected</span>` : ''}
+                ${burnLabel(paste) ? html`<span class="badge badge-warn">${burnLabel(paste)}</span>` : ''}
                 ${
                   paste.expires_at
                     ? html`<span class="badge ${relativeTime(paste.expires_at).startsWith('in') ? '' : 'badge-warn'}">expires ${relativeTime(paste.expires_at)}</span>`

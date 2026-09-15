@@ -4,8 +4,10 @@
  */
 
 import {
+  BURN_MODES,
   CLEANUP_BATCH,
   COOKIE,
+  DEFAULT_BURN_MODE,
   EXPIRATIONS,
   LIMITS,
   UNLOCK_MAX_TOKENS,
@@ -25,6 +27,7 @@ import {
 } from '../lib/auth.js';
 import { HttpError, headers, htmlResponse, parseForm, readBody, redirect, safeRedirectTarget, svgResponse, textResponse } from '../lib/http.js';
 import { appSecret, canReadPaste, isPasteOwner } from '../lib/access.js';
+import { burnLabel, burnModeOf, claimBurnForRead } from '../lib/burn.js';
 import {
   hashPassphrase,
   issueUnlockToken,
@@ -43,6 +46,7 @@ import {
   normalizeFontSize,
   normalizeLanguage,
   safeFilename,
+  validateBurnMode,
   validateContent,
   validatePassphrase,
   validateTitle,
@@ -128,7 +132,9 @@ function readPasteInput(form, user, mode = 'create') {
   const expiration = normalizeExpiration(form.expiration ?? form.expiresIn);
   const passphrase = readPassphrase(form, mode);
   if (passphrase.error) errors.push(passphrase.error);
-  return { errors, title: title.ok ? title.value : String(form.title ?? '').slice(0, 200), content: content.ok ? content.value : String(form.content ?? ''), language, font, fontSize, expiration, passphrase: passphrase.state };
+  const burnMode = validateBurnMode(form.burn_after);
+  if (!burnMode.ok) errors.push(burnMode.error);
+  return { errors, title: title.ok ? title.value : String(form.title ?? '').slice(0, 200), content: content.ok ? content.value : String(form.content ?? ''), language, font, fontSize, expiration, passphrase: passphrase.state, burnMode: burnMode.ok ? burnMode.value : DEFAULT_BURN_MODE };
 }
 
 // ---------------------------------------------------------------------------
@@ -140,7 +146,16 @@ export async function home(ctx) {
   const body = editorPage({
     ...pageCtx(ctx),
     mode: 'create',
-    values: { title: '', content: '', language: 'plaintext', font: 'mono', font_size: 14, expiration: '1w', protected: false },
+    values: {
+      title: '',
+      content: '',
+      language: 'plaintext',
+      font: 'mono',
+      font_size: 14,
+      expiration: '1w',
+      burn_after: DEFAULT_BURN_MODE,
+      protected: false,
+    },
     maxBytes: maxBytesFor(ctx.user),
   });
   return htmlResponse(body, 200, {}, { cache: 'no-store' });
@@ -171,6 +186,7 @@ export async function create(ctx) {
         font: input.font,
         font_size: input.fontSize,
         expiration: input.expiration.id,
+        burn_after: input.burnMode,
         protected: input.passphrase.mode === 'set',
       },
       errors: input.errors,
@@ -188,6 +204,7 @@ export async function create(ctx) {
     expiresAt: input.expiration.expiresAt,
     userId: ctx.user ? ctx.user.id : null,
     passwordHash: await resolvePassphraseHash(input.passphrase),
+    burnMode: input.burnMode,
     now: ctx.now,
   });
 
@@ -210,11 +227,25 @@ export async function view(ctx, params) {
   // Password-protected and not (yet) unlocked: show the lock screen only.
   // A failed look-up is never counted as a view and never consumes anything.
   if (!(await canReadPaste(ctx, paste))) {
-    return htmlResponse(unlockPage({ ...pageCtx(ctx), paste }), 200, {}, { noindex: true });
+    return htmlResponse(
+      unlockPage({ ...pageCtx(ctx), paste, burnLabel: burnLabel(paste) }),
+      200,
+      {},
+      { noindex: true },
+    );
   }
 
+  // Burn-after-reading: claim the single allowed view before rendering, and
+  // hand the losers the standard 404. This runs after the password gate, so a
+  // lock screen can never consume a one-time paste.
+  if (!(await claimBurnForRead(ctx.db, paste, 'view'))) {
+    throw new HttpError(404, 'This paste does not exist, or it expired and was deleted.');
+  }
+
+  const burning = burnModeOf(paste) !== DEFAULT_BURN_MODE;
   const visitor = await visitorHash(appSecret(ctx), ctx.ip, paste.id);
-  const views = await recordView(ctx.db, paste.id, visitor, ctx.now).catch(() => Number(paste.views));
+  // A one-time paste is deleted as it is served, so there is nothing to count.
+  const views = burning ? Number(paste.views) : await recordView(ctx.db, paste.id, visitor, ctx.now).catch(() => Number(paste.views));
 
   const oversized = paste.size > LIMITS.highlightMaxBytes;
   const contentHtml = oversized
@@ -260,6 +291,7 @@ export async function unlock(ctx, params) {
     const body = unlockPage({
       ...pageCtx(ctx),
       paste,
+      burnLabel: burnLabel(paste),
       errors: ['Wrong passphrase.'],
       locked: true,
     });
@@ -288,6 +320,13 @@ export async function raw(ctx, params) {
       { 'WWW-Authenticate': 'mantisbin-unlock', 'X-Robots-Tag': 'noindex, nofollow' },
       { cache: 'no-store' },
     );
+  }
+  // Burn-after-reading in `read` mode: /raw consumes the paste too. This runs
+  // after the password gate and after the 401 above, so neither can burn it.
+  if (!(await claimBurnForRead(ctx.db, paste, 'read'))) {
+    return textResponse('This paste does not exist, or it expired and was deleted.\n', 404, {
+      'X-Robots-Tag': 'noindex, nofollow',
+    }, { cache: 'no-store' });
   }
   const filename = `${safeFilename(paste.title)}.txt`;
   const disposition = ctx.url.searchParams.get('download') === '1' ? 'attachment' : 'inline';
@@ -334,6 +373,7 @@ export async function editForm(ctx, params) {
       font: paste.font,
       font_size: paste.font_size,
       expiration: expirationForExisting(paste.expires_at, ctx.now),
+      burn_after: burnModeOf(paste),
       protected: Boolean(paste.password_hash),
     },
     maxBytes: maxBytesFor(ctx.user),
@@ -369,6 +409,7 @@ export async function editSave(ctx, params) {
         font: input.font,
         font_size: input.fontSize,
         expiration: input.expiration.id,
+        burn_after: input.burnMode,
         protected: Boolean(full?.password_hash),
       },
       errors: input.errors,
@@ -389,6 +430,7 @@ export async function editSave(ctx, params) {
       fontSize: input.fontSize,
       expiresAt: input.expiration.expiresAt,
       passwordHash: await resolvePassphraseHash(input.passphrase),
+      burnMode: input.burnMode,
     },
     ctx.now,
   );

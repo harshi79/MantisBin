@@ -36,7 +36,7 @@ async function columns(db, table) {
 test('a fresh database has every column the app expects', async () => {
   const db = createNodeDb(':memory:');
   await ensureSchema(db);
-  for (const column of ['password_hash']) {
+  for (const column of ['password_hash', 'burn_mode', 'burned']) {
     assert.ok((await columns(db, 'pastes')).includes(column), `pastes.${column}`);
   }
   await db.close();
@@ -50,17 +50,22 @@ test('an existing pre-2.2 database is migrated in place, idempotently', async ()
   );
 
   await ensureSchema(db);
-  assert.ok((await columns(db, 'pastes')).includes('password_hash'), 'the new column is added');
-  const row = await db.get('SELECT title, content, views, password_hash FROM pastes WHERE id = ?', ['oldRow01']);
+  for (const column of ['password_hash', 'burn_mode', 'burned']) {
+    assert.ok((await columns(db, 'pastes')).includes(column), `pastes.${column} is added`);
+  }
+  const row = await db.get('SELECT title, content, views, password_hash, burn_mode, burned FROM pastes WHERE id = ?', ['oldRow01']);
   assert.equal(row.title, 'pre-2.2 paste', 'existing rows survive the migration');
   assert.equal(row.views, 3);
   assert.equal(row.password_hash, null, 'unprotected by default');
+  assert.equal(row.burn_mode, 'never', 'existing pastes do not start burning');
+  assert.equal(row.burned, 0);
 
   // Every later cold start repeats the run: it must stay a no-op.
   await ensureSchema(db);
   await ensureSchema(db);
-  const named = (await columns(db, 'pastes')).filter((name) => name === 'password_hash');
-  assert.equal(named.length, 1, 'the column is never duplicated');
+  for (const column of ['password_hash', 'burn_mode', 'burned']) {
+    assert.equal((await columns(db, 'pastes')).filter((name) => name === column).length, 1, `${column} is never duplicated`);
+  }
 
   // The migrated table accepts a protected paste.
   await db.run(

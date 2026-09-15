@@ -1,5 +1,5 @@
 /**
- * Scheduled maintenance: delete expired pastes and prune housekeeping rows.
+ * Scheduled maintenance: delete expired and burned pastes and prune housekeeping rows.
  *
  * Runs from the Worker `scheduled` trigger (cron in wrangler.jsonc) and is also
  * invoked opportunistically on paste creation, so expired content never lingers
@@ -8,6 +8,7 @@
  */
 
 import { CLEANUP_BATCH } from '../config.js';
+import { pruneBurned } from './burn.js';
 import { pruneExpired, pruneViewLog } from './pastes.js';
 import { pruneSessions } from './auth.js';
 import { pruneRateLimits } from './ratelimit.js';
@@ -18,10 +19,12 @@ import { pruneRateLimits } from './ratelimit.js';
  */
 export async function runMaintenance(db, now = Math.floor(Date.now() / 1000)) {
   const expired = await pruneExpired(db, now, CLEANUP_BATCH);
+  // One-time pastes claimed by a request that died before deleting them.
+  const burned = await pruneBurned(db, CLEANUP_BATCH);
   const views = await pruneViewLog(db, now);
   const sessions = await pruneSessions(db, now);
   const rateLimits = await pruneRateLimits(db, now);
-  const summary = { expired, viewLog: views, sessions, rateLimits };
+  const summary = { expired, burned, viewLog: views, sessions, rateLimits };
   console.log('[mantisbin] maintenance', JSON.stringify(summary));
   return summary;
 }
