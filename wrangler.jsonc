@@ -8,23 +8,26 @@
 	"name": "mantisbin",
 	"main": "src/worker.js",
 	"compatibility_date": "2026-01-01",
+
 	// Hourly cleanup of expired pastes, stale sessions and rate-limit buckets.
 	"triggers": {
 		"crons": [
 			"13 * * * *"
 		]
 	},
+
 	// Static files (app.css, app.js, robots.txt) are served straight from the
 	// edge; anything that does not match an asset is handled by the Worker.
 	"assets": {
 		"directory": "./public",
 		"not_found_handling": "none"
 	},
+
 	"vars": {
 		"SITE_URL": "https://mantisbin.yoriloveall.workers.dev"
 	},
+
 	"observability": {
 		"enabled": true
-	},
 	}
 }
