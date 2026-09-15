@@ -8,7 +8,6 @@ import {
   CLEANUP_BATCH,
   COOKIE,
   DEFAULT_BURN_MODE,
-  EXPIRATIONS,
   LIMITS,
   UNLOCK_MAX_TOKENS,
   UNLOCK_TTL_SECONDS,
@@ -40,6 +39,7 @@ import { addLineAnchors, renderCode } from '../lib/highlight.js';
 import { faviconSvg, logoSvg, markSvg } from '../assets/mark.js';
 import {
   cleanText,
+  expirationPresetFor,
   isValidPasteId,
   normalizeExpiration,
   normalizeFont,
@@ -341,15 +341,61 @@ export async function raw(ctx, params) {
   );
 }
 
-/** Pick the preset closest to (but not shorter than) a paste's remaining life. */
-function expirationForExisting(expiresAt, now) {
-  if (expiresAt === null || expiresAt === undefined) return 'never';
-  const remaining = Number(expiresAt) - now;
-  if (remaining <= 0) return 'never';
-  for (const option of EXPIRATIONS) {
-    if (option.seconds > 0 && option.seconds >= remaining) return option.id;
+/**
+ * GET /p/:id/fork — the duplicate screen behind "Create a copy".
+ *
+ * The form is the ordinary editor (pre-filled from the source) posting to the
+ * ordinary create endpoint, so a copy is a normal paste created by the actor:
+ * own random id, own expiration, own view count, own ownership, and the create
+ * limits/validation apply unchanged. Nothing is copied from a paste the actor
+ * cannot read: a protected source shows the unlock screen first (the unlock form
+ * posts `next` straight back here), and a one-time source is consumed by this
+ * read exactly as a view would be.
+ */
+export async function forkForm(ctx, params) {
+  if (!isValidPasteId(params.id)) throw new HttpError(404);
+  const paste = await getPaste(ctx.db, params.id, { content: true, now: ctx.now });
+  if (!paste) throw new HttpError(404, 'This paste does not exist, or it expired and was deleted.');
+
+  if (!(await canReadPaste(ctx, paste))) {
+    return htmlResponse(
+      unlockPage({
+        ...pageCtx(ctx),
+        paste,
+        burnLabel: burnLabel(paste),
+        next: `/p/${paste.id}/fork`,
+      }),
+      200,
+      {},
+      { noindex: true },
+    );
   }
-  return '1y';
+
+  const oneTime = burnLabel(paste);
+  if (!(await claimBurnForRead(ctx.db, paste, 'view'))) {
+    throw new HttpError(404, 'This paste does not exist, or it expired and was deleted.');
+  }
+
+  const body = editorPage({
+    ...pageCtx(ctx),
+    mode: 'fork',
+    pasteId: paste.id,
+    values: {
+      title: paste.title,
+      content: paste.content,
+      language: paste.language,
+      font: paste.font,
+      font_size: paste.font_size,
+      expiration: expirationPresetFor(paste.expires_at, ctx.now),
+      burn_after: DEFAULT_BURN_MODE,
+      protected: false,
+    },
+    okMessage: oneTime
+      ? `This was a one-time paste (${oneTime}) and has now been consumed — the copy you save is the only copy left.`
+      : null,
+    maxBytes: maxBytesFor(ctx.user),
+  });
+  return htmlResponse(body, 200, {}, { noindex: true });
 }
 
 /** GET /p/:id/edit */
@@ -372,7 +418,7 @@ export async function editForm(ctx, params) {
       language: paste.language,
       font: paste.font,
       font_size: paste.font_size,
-      expiration: expirationForExisting(paste.expires_at, ctx.now),
+      expiration: expirationPresetFor(paste.expires_at, ctx.now),
       burn_after: burnModeOf(paste),
       protected: Boolean(paste.password_hash),
     },

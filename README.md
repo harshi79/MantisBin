@@ -10,6 +10,7 @@ A fast, minimal paste-sharing utility for plain text and code.
 - Manual syntax highlighting for 27 languages, rendered server-side (zero client JS needed to read a paste)
 - Optional password protection: a paste stays locked — title and content both hidden — until the passphrase is verified
 - Burn after reading: a one-time paste is deleted the moment it is first viewed (or first read, including `raw`/API)
+- Duplicate any paste you can read: a copy gets its own URL, expiration and owner, and the original is untouched
 - Dark + light themes, system fonts only, no webfont/CDN requests
 - Public JSON API with key-gated writes
 - Built for **Cloudflare Workers + Cloudflare Assets**, backed by **Turso (libSQL/SQLite)**
@@ -27,7 +28,7 @@ The dev server runs the *exact same* application code as the production Worker,
 using Node 22's built-in SQLite (`.data/mantisbin.db`). No cloud account needed.
 
 ```bash
-npm test           # 78 end-to-end + unit tests (node:test)
+npm test           # 89 end-to-end + unit tests (node:test)
 npm run typecheck  # tsc --noEmit over JSDoc-typed JS
 npm run build      # wrangler deploy --dry-run (bundles the Worker + assets)
 npm run clean-expired   # manual expiration sweep
@@ -75,6 +76,7 @@ values — `npm run dev` then uses the real database.
 | `POST /p` | Create a paste (form-encoded; works without JS) |
 | `GET /p/:id` | View a paste (public, unlisted, `noindex`). Shows the unlock screen when the paste is protected; consumes a burn-after-reading paste |
 | `POST /p/:id/unlock` | Verify a protected paste's passphrase, set the signed unlock cookie, redirect back to the paste |
+| `GET /p/:id/fork` | "Duplicate" — a pre-filled editor for a copy. Saving posts to the ordinary `POST /p`, so create limits and validation apply unchanged |
 | `GET /p/:id/raw` | Exact bytes as `text/plain` — for `curl`, scripts, terminals (`?download=1` forces attachment) |
 | `GET/POST /p/:id/edit` | Edit **your own** paste (account required) |
 | `POST /p/:id/delete` | Delete **your own** paste |
@@ -85,11 +87,35 @@ values — `npm run dev` then uses the real database.
 | `POST /api/pastes` | Create via API (**API key required**) |
 | `GET /api/pastes/:id`, `GET /api/pastes/:id/raw` | Fetch via API (public, no key). `401` while a protected paste is locked |
 | `POST /api/pastes/:id/unlock` | Scriptable unlock: verifies the passphrase, returns the same `HttpOnly` cookie (`401` on a wrong passphrase, `429` when rate limited) |
+| `POST /api/pastes/:id/fork` | Copy a paste: a key makes the copy owned by that account, no key makes it anonymous (public) |
 | `GET /api/pastes/mine`, `PATCH /api/pastes/:id`, `DELETE /api/pastes/:id` | Key-gated management |
 | `/app.css`, `/app.js`, `/robots.txt` | Static files served by Cloudflare Assets |
 | `/favicon.svg`, `/logo.svg`, `/mark.svg` | Brand assets, generated from one source (`src/assets/mark.js`) |
 
 ## Limits & behaviour
+
+### Duplicating a paste (2.2 §3)
+
+"Duplicate" on a paste view opens a pre-filled editor; saving creates a normal
+paste from the create endpoint, so nothing about the copy bypasses validation,
+limits or ownership rules.
+
+- The copy gets a new random id, its own expiration (the source's remaining
+  lifetime, rounded up to the next preset — or `never` for a `never` source), its
+  own view count and its own password/burn settings. The source keeps its URL,
+  content, expiration, view count and owner.
+- Ownership follows the actor: anonymous → anonymous copy, signed-in → copy owned
+  by that account, API key → copy owned by that account's team (`user_id`).
+- Limits are the actor's limits: 5 MB / 60 per hour per IP for anonymous copies,
+  10 MB / 300 per hour per key for API copies.
+- A protected source must be unlocked first; the API answer is `401` and the web
+  screen is the unlock page, which returns to the duplicate screen afterwards.
+  Owners (session or their own API key) never need the passphrase.
+- A one-time source is **consumed** by duplicating it — copying hands the content
+  over exactly like a view does — so a `read`/`view` paste yields one copy and
+  then 404s for everyone.
+- Passwords are never copied (the server cannot read them back): the copy starts
+  unprotected and may be given a new one.
 
 ### Burn after reading (2.2 §2)
 
@@ -128,6 +154,7 @@ consumption. The creator picks one of three modes (`after reading` on the editor
 - Titles: required, ≤ 120 chars. Usernames: 4–6 letters/digits. Passwords: ≥ 8 chars, PBKDF2-SHA256 (100k — the Cloudflare Workers ceiling).
 - Paste passphrases (optional): ≥ 6 chars, ≤ 256, stored only as a PBKDF2-SHA256 hash with a per-paste salt. Unlocking lasts 30 minutes in an `HttpOnly; SameSite=Lax` cookie, and is capped at 10 attempts / 15 min per paste + IP (`429` + `Retry-After`).
 - Burn modes: `never` (default), `view`, `read`. A burned paste is deleted, not archived — the winning read is the only read.
+- Duplicating counts as a content read: the copy follows the actor's limits (5 MB / 60 per hour per IP anonymous, 10 MB / 300 per hour per key), and duplicating a one-time paste consumes it.
 - View counts dedupe repeat visitors per paste for 6 hours (IPs stored only as HMAC hashes).
 - Reads via API: 3000/hour per IP. Auth endpoints: 40/15 min per IP. All limits are abuse guards, not quotas.
 - Highlighting + linkification are skipped above 256 KB so huge pastes render instantly; `/raw` always returns exact bytes.
@@ -144,7 +171,7 @@ MantisBin 2.1 keeps the minimal, unlisted-paste model while improving the daily 
 - **Native sharing:** the Share control uses the browser Web Share API when available and falls back to copying the canonical paste URL. It never sends content to a third-party sharing service.
 - **CSP cleanup:** share/key inputs use `public/app.js` event listeners instead of inline `onclick` handlers, preserving the strict Content Security Policy.
 
-The 2.1 test suite contains 39 end-to-end and unit tests (78 after the 2.2 §1–§2 work). Run `npm test`, `npm run typecheck`, and `npm run build` before deployment.
+The 2.1 test suite contains 39 end-to-end and unit tests (89 after the 2.2 §1–§3 work). Run `npm test`, `npm run typecheck`, and `npm run build` before deployment.
 
 ### MantisBin 2.2 — shipped one feature at a time
 
@@ -154,7 +181,7 @@ This is the source of truth for the 2.2 work. Keep the product private, unlisted
 | --- | --- | --- |
 | 1 | Password-protected pastes | **shipped** |
 | 2 | Burn-after-reading pastes | **shipped** |
-| 3 | Fork / duplicate paste | planned |
+| 3 | Fork / duplicate paste | **shipped** |
 | 4 | Optional automatic language detection | planned |
 | 5 | QR sharing | planned |
 
@@ -217,7 +244,26 @@ Add explicit expiration modes for temporary handoffs:
 - Show the selected burn behavior in the creator form and paste metadata without exposing secret content.
 - Add database, concurrency, web, raw, API, and maintenance tests. _Shipped: `tests/burn.test.js`._
 
-#### 3. Fork / duplicate paste
+#### 3. Fork / duplicate paste — shipped
+
+Implementation notes:
+
+- `GET /p/:id/fork` renders the ordinary editor (new `fork` mode) pre-filled from
+  the source and posting to the ordinary `POST /p`: no second create pipeline, so
+  validation, size limits, rate limits and ownership rules are shared by
+  construction. `public/app.js` keeps drafts out of the duplicate screen.
+- `POST /api/pastes/:id/fork` performs the copy server-side (201 + the new paste
+  object) with optional `title`, `language`, `font`, `fontSize`, `expiresIn`,
+  `password` and `burnAfter` overrides; `content` is refused because the copy
+  always comes from the source.
+- The source is read through the same authorisation gate as a view
+  (`canReadPaste` + ownership/API-key ownership), then claimed with
+  `claimBurnForRead(..., 'view')`, so a locked source can only be copied after a
+  successful unlock and a one-time source is consumed rather than left behind.
+- `expirationPresetFor()` (moved into `lib/validate.js`) gives the copy the
+  source's remaining lifetime; `tests/fork.test.js` (11 tests) covers
+  pre-filling, independence of copies, ownership per actor, overrides, size and
+  rate limits, protected-source gating, owner bypass and one-time consumption.
 
 - Add a “Create a copy” action on paste views.
 - The source paste remains unchanged and keeps its original URL, expiration, view count, and owner.
@@ -225,7 +271,7 @@ Add explicit expiration modes for temporary handoffs:
 - Anonymous users can create anonymous copies; signed-in users/API-key clients create owned copies.
 - Copy the title, content, language, font, and font size by default, with an obvious way to edit before saving.
 - Do not let duplication bypass size limits, rate limits, password protection, or burn-after-reading rules.
-- Decide and document whether protected/burn-on-read sources require unlocking before copying; default should be to require unlock and never copy content from a failed/partial read.
+- Decide and document whether protected/burn-on-read sources require unlocking before copying; default should be to require unlock and never copy content from a failed/partial read. _Shipped: both require it — a locked source answers `401` (API) or the unlock screen (web), and a one-time source is consumed by the copy._
 
 #### 4. Optional automatic language detection
 
@@ -253,7 +299,7 @@ Before calling 2.2 complete, update the API docs and README, add migration notes
 | --- | --- | --- | --- | --- |
 | 1. Password-protected pastes | ✅ `tests/password.test.js`, `tests/unlock.test.js` | ✅ | ✅ `pastes.password_hash` | ✅ test / typecheck / build |
 | 2. Burn after reading | ✅ `tests/burn.test.js` (13) | ✅ | ✅ `pastes.burn_mode`, `pastes.burned` | ✅ test / typecheck / build |
-| 3. Fork / duplicate | — | — | — | — |
+| 3. Fork / duplicate | ✅ `tests/fork.test.js` (11) | ✅ | none (no schema change) | ✅ test / typecheck / build |
 | 4. Auto language detection | — | — | — | — |
 | 5. QR sharing | — | — | — | — |
 
@@ -310,6 +356,9 @@ Design rules the codebase follows:
 - One-time pastes: the claim is a single conditional `UPDATE`, so concurrent
   readers cannot both be served; the row is then deleted, and a burned row is
   unreadable even before the delete (both paths are covered by tests).
+- Duplication never reads around the gates: the fork routes authorise (and claim
+  a burn) exactly like a view before any content is copied, and a copy is stored
+  as a brand-new paste owned by the actor — the source row is not touched.
 - Passwords: PBKDF2-HMAC-SHA256, 100 000 iterations (the Cloudflare Workers ceiling —
   `deriveBits` throws `NotSupportedError` above it), per-user salt; constant-time compares.
   The iteration count is stored inside every hash, so it can be tuned without locking anyone out.

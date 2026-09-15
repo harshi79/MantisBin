@@ -48,6 +48,7 @@ const ROUTE_TABLE = [
   ['GET', '/p/:id', web.view],
   ['POST', '/p/:id/unlock', web.unlock],
   ['GET', '/p/:id/raw', web.raw],
+  ['GET', '/p/:id/fork', web.forkForm],
   ['GET', '/p/:id/edit', web.editForm],
   ['POST', '/p/:id/edit', web.editSave],
   ['POST', '/p/:id/delete', web.remove],
@@ -72,6 +73,7 @@ const ROUTE_TABLE = [
   ['PATCH', '/api/pastes/:id', api.update],
   ['DELETE', '/api/pastes/:id', api.remove],
   ['GET', '/api/pastes/:id/raw', api.raw],
+  ['POST', '/api/pastes/:id/fork', api.fork],
   ['POST', '/api/pastes/:id/unlock', api.unlock],
 ];
 

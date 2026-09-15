@@ -30,6 +30,7 @@ import { alertBox, layout } from './layout.js';
  *   errors?: string[],
  *   locked?: boolean,
  *   burnLabel?: string | null,
+ *   next?: string | null,
  * }} options
  */
 export function unlockPage(options) {
@@ -66,6 +67,7 @@ export function unlockPage(options) {
             stored, never put in the URL and never visible to this page.
           </p>
         </div>
+        ${options.next ? html`<input type="hidden" name="next" value="${options.next}">` : ''}
         <div class="submit-row">
           <div class="spacer"></div>
           <a class="btn" href="/">New paste</a>

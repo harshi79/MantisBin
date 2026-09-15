@@ -38,6 +38,7 @@ export function pastePage(options) {
         <button class="btn btn-sm" type="button" data-copy="#paste-content">Copy</button>
         <a class="btn btn-sm" href="/p/${paste.id}/raw">Raw</a>
         <a class="btn btn-sm" href="/p/${paste.id}/raw?download=1" download="${safeFilename(paste.title)}.txt">Download</a>
+        <a class="btn btn-sm" href="/p/${paste.id}/fork" title="Create a copy of this paste">Duplicate</a>
         <button class="btn btn-sm" type="button" data-share>Share</button>
         ${options.lineNumbers ? html`<button class="btn btn-sm" type="button" data-copy-location>Copy line link</button>` : ''}
         <button class="btn btn-sm" type="button" data-wrap-toggle="#paste-content" aria-pressed="false">Wrap</button>

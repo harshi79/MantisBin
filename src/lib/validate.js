@@ -170,6 +170,24 @@ export function normalizeExpiration(value, now = Math.floor(Date.now() / 1000)) 
   };
 }
 
+/**
+ * Pick the preset closest to (but not shorter than) a moment in the future.
+ * Used when a paste is duplicated so the copy keeps the source's remaining life
+ * without ever outliving it more than one preset step.
+ * @param {number | null | undefined} expiresAt
+ * @param {number} now
+ * @returns {string} an EXPIRATIONS id
+ */
+export function expirationPresetFor(expiresAt, now = Math.floor(Date.now() / 1000)) {
+  if (expiresAt === null || expiresAt === undefined) return 'never';
+  const remaining = Number(expiresAt) - now;
+  if (!Number.isFinite(remaining) || remaining <= 0) return 'never';
+  for (const option of EXPIRATIONS) {
+    if (option.seconds > 0 && option.seconds >= remaining) return option.id;
+  }
+  return '1y';
+}
+
 const PASTE_ID_RE = new RegExp(`^[A-Za-z0-9]{${LIMITS.idLength}}$`);
 
 /** Paste IDs are base62 strings of a fixed length; reject anything else early. */
