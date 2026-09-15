@@ -71,6 +71,18 @@ X-API-Key: mb_…</code></pre>
         web route when you want an attachment with a safe title-derived filename; the API route stays inline.
       </p>
 
+      <h2 id="qr">QR sharing</h2>
+      <div class="endpoint"><span class="method method-get">GET</span> <code>/p/:id/qr</code> <span class="muted small">— server-rendered QR share page (public)</span></div>
+      <p>
+        The QR action is progressive enhancement: without JavaScript it opens this page normally; with a
+        selected line anchor, <code>public/app.js</code> adds only that line number to the QR request.
+        The generated code and the accessible text fallback contain only the canonical
+        <code>https://…/p/:id#(line-N)</code> URL — never the paste title, content or passphrase.
+        <code>GET /p/:id/qr.svg</code> is the same dependency-free image for saving; append
+        <code>?line=N&amp;download=1</code> for a download. Expired links return <code>404</code>, and a
+        protected paste still asks for its passphrase when the QR link is opened.
+      </p>
+
       <h2 id="fork">Duplicating a paste</h2>
       <div class="endpoint"><span class="method">POST</span> <code>/api/pastes/:id/fork</code> <span class="muted small">— copy a paste (public; a key makes the copy owned)</span></div>
       <p>

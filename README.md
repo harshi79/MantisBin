@@ -11,6 +11,7 @@ A fast, minimal paste-sharing utility for plain text and code.
 - Optional password protection: a paste stays locked — title and content both hidden — until the passphrase is verified
 - Burn after reading: a one-time paste is deleted the moment it is first viewed (or first read, including `raw`/API)
 - Duplicate any paste you can read: a copy gets its own URL, expiration and owner, and the original is untouched
+- Auto language detection is bounded and resolves once; optional dependency-free QR sharing uses only the canonical URL
 - Dark + light themes, system fonts only, no webfont/CDN requests
 - Public JSON API with key-gated writes
 - Built for **Cloudflare Workers + Cloudflare Assets**, backed by **Turso (libSQL/SQLite)**
@@ -28,7 +29,7 @@ The dev server runs the *exact same* application code as the production Worker,
 using Node 22's built-in SQLite (`.data/mantisbin.db`). No cloud account needed.
 
 ```bash
-npm test           # 89 end-to-end + unit tests (node:test)
+npm test           # 98 end-to-end + unit tests (node:test)
 npm run typecheck  # tsc --noEmit over JSDoc-typed JS
 npm run build      # wrangler deploy --dry-run (bundles the Worker + assets)
 npm run clean-expired   # manual expiration sweep
@@ -78,6 +79,8 @@ values — `npm run dev` then uses the real database.
 | `POST /p/:id/unlock` | Verify a protected paste's passphrase, set the signed unlock cookie, redirect back to the paste |
 | `GET /p/:id/fork` | "Duplicate" — a pre-filled editor for a copy. Saving posts to the ordinary `POST /p`, so create limits and validation apply unchanged |
 | `GET /p/:id/raw` | Exact bytes as `text/plain` — for `curl`, scripts, terminals (`?download=1` forces attachment) |
+| `GET /p/:id/qr` | Server-rendered QR share page; encodes only the canonical paste URL |
+| `GET /p/:id/qr.svg` | Dependency-free QR image (`?line=N&download=1` saves it) |
 | `GET/POST /p/:id/edit` | Edit **your own** paste (account required) |
 | `POST /p/:id/delete` | Delete **your own** paste |
 | `GET/POST /login`, `GET/POST /register`, `POST /logout` | Accounts (username + password only) |
@@ -157,7 +160,7 @@ consumption. The creator picks one of three modes (`after reading` on the editor
 - Duplicating counts as a content read: the copy follows the actor's limits (5 MB / 60 per hour per IP anonymous, 10 MB / 300 per hour per key), and duplicating a one-time paste consumes it.
 - View counts dedupe repeat visitors per paste for 6 hours (IPs stored only as HMAC hashes).
 - Reads via API: 3000/hour per IP. Auth endpoints: 40/15 min per IP. All limits are abuse guards, not quotas.
-- Highlighting + linkification are skipped above 256 KB so huge pastes render instantly; `/raw` always returns exact bytes.
+- Highlighting + linkification are skipped above 256 KB so huge pastes render instantly; `/raw` always returns exact bytes. Auto language detection examines at most a 64 KiB prefix and resolves a paste over the 256 KiB heavy-work threshold to plaintext.
 
 ## Release roadmap
 
@@ -291,14 +294,22 @@ Implementation notes:
 - `tests/detect.test.js` covers clear formats, ambiguous input, manual overrides,
   the web form, API responses, large-input bounds and deterministic storage.
 
-#### 5. QR sharing
+#### 5. QR sharing — shipped
 
-- Add a QR action that encodes only the canonical paste URL, never the paste content or password.
-- Keep generation dependency-free or use a carefully reviewed local implementation; do not call an external QR/CDN service.
-- Provide accessible text fallback and a way to save/download the QR image.
-- Respect line anchors when generating a QR after a line has been selected.
-- Keep QR UI progressive-enhancement only: the paste must remain fully usable without JavaScript.
-- Add tests for canonical URL generation, escaping, expiration links, and protected-paste behavior.
+Implementation notes:
+
+- Paste views add a no-JS `QR` link to `/p/:id/qr`. `public/app.js` only enhances
+  that link when the current URL has a valid `#line-N` anchor, passing the numeric
+  line to the server; the server reconstructs the canonical URL before encoding.
+- `src/lib/qr.js` is a local byte-mode QR encoder (level L, versions 1–40) with
+  no dependency or CDN. Its API accepts one canonical URL string, so content and
+  passphrases cannot become QR payload fields by accident.
+- The QR page renders an inline SVG, an accessible read-only URL fallback, copy
+  action and a `/p/:id/qr.svg?download=1` save link. Protected QR pages do not
+  reveal the protected title/content and opening the encoded URL still requires
+  its passphrase; expired sources return the normal `404`.
+- `tests/qr.test.js` covers canonical URLs/anchors, SVG escaping, expiry links,
+  protected behavior, downloads and the no-content/no-secret contract.
 
 #### 2.2 completion checklist
 
@@ -310,7 +321,7 @@ Before calling 2.2 complete, update the API docs and README, add migration notes
 | 2. Burn after reading | ✅ `tests/burn.test.js` (13) | ✅ | ✅ `pastes.burn_mode`, `pastes.burned` | ✅ test / typecheck / build |
 | 3. Fork / duplicate | ✅ `tests/fork.test.js` (11) | ✅ | none (no schema change) | ✅ test / typecheck / build |
 | 4. Auto language detection | ✅ `tests/detect.test.js` | ✅ | none | ✅ test / typecheck / build |
-| 5. QR sharing | — | — | — | — |
+| 5. QR sharing | ✅ `tests/qr.test.js` | ✅ | none | ✅ test / typecheck / build |
 
 ## Architecture
 
@@ -324,7 +335,7 @@ src/
     turso.js         libSQL adapter (Workers) — the only runtime dependency (@libsql/client)
     node-sqlite.js   Node built-in SQLite adapter (dev + tests), same SQL
   lib/               crypto, auth/sessions/keys, pastes, access (read authorisation),
-                     unlock (passphrase + signed unlock cookie), ratelimit, detect, highlighter, html, http, maintenance
+                     unlock (passphrase + signed unlock cookie), ratelimit, detect, qr, highlighter, html, http, maintenance
   routes/            web.js (HTML forms) + api.js (JSON)
   views/             server-rendered pages (escaping-by-construction tagged templates)
   assets/mark.js     the mantis mark: one geometry, reused as inline SVG, favicon, logo
@@ -368,6 +379,14 @@ Design rules the codebase follows:
 - Duplication never reads around the gates: the fork routes authorise (and claim
   a burn) exactly like a view before any content is copied, and a copy is stored
   as a brand-new paste owned by the actor — the source row is not touched.
+- Automatic language detection is bounded to a 64 KiB prefix and skips the
+  existing 256 KiB heavy-render path. It uses only inert fingerprints and a
+  capped JSON parse; pasted text is never executed or imported, and ambiguous
+  input resolves to stored `plaintext`.
+- QR sharing is local and dependency-free. The QR encoder receives only the
+  canonical `/p/:id` URL plus an optional validated `#line-N` fragment; it never
+  receives content, title or passphrase. Locked QR pages hide the title/content,
+  and the encoded link still opens the normal password gate.
 - Passwords: PBKDF2-HMAC-SHA256, 100 000 iterations (the Cloudflare Workers ceiling —
   `deriveBits` throws `NotSupportedError` above it), per-user salt; constant-time compares.
   The iteration count is stored inside every hash, so it can be tuned without locking anyone out.

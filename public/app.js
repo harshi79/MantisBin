@@ -411,6 +411,24 @@
     });
   }
 
+  /* ---- QR sharing ------------------------------------------------------- */
+
+  // The server renders a working QR page for no-JS users. When a reader has
+  // selected a line, add only that numeric anchor as a query to the QR route;
+  // the route turns it back into the canonical `#line-N` URL before encoding.
+  var qrLinks = doc.querySelectorAll('[data-qr-link]');
+  for (var q = 0; q < qrLinks.length; q++) {
+    qrLinks[q].addEventListener('click', function (event) {
+      var link = event.currentTarget;
+      var target = new URL(link.getAttribute('href'), window.location.href);
+      var match = /^#line-([1-9][0-9]{0,6})$/.exec(window.location.hash);
+      if (match) target.searchParams.set('line', match[1]);
+      else target.searchParams.delete('line');
+      target.hash = '';
+      link.href = target.toString();
+    });
+  }
+
   var selectable = doc.querySelectorAll('[data-select-all]');
   for (var a = 0; a < selectable.length; a++) {
     selectable[a].addEventListener('focus', function (event) {

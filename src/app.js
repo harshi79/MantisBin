@@ -47,6 +47,8 @@ const ROUTE_TABLE = [
   ['POST', '/p', web.create],
   ['GET', '/p/:id', web.view],
   ['POST', '/p/:id/unlock', web.unlock],
+  ['GET', '/p/:id/qr', web.qr],
+  ['GET', '/p/:id/qr.svg', web.qrImage],
   ['GET', '/p/:id/raw', web.raw],
   ['GET', '/p/:id/fork', web.forkForm],
   ['GET', '/p/:id/edit', web.editForm],

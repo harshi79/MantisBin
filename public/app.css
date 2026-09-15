@@ -667,6 +667,49 @@ kbd {
   max-width: 480px;
 }
 
+/* ---- QR share ---------------------------------------------------------- */
+
+.qr-card {
+  max-width: 520px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  padding: 18px;
+  margin: 16px 0;
+}
+
+.qr-image {
+  display: flex;
+  justify-content: center;
+  padding: 12px;
+  border-radius: var(--radius);
+  background: #fff;
+}
+
+.qr-image svg {
+  display: block;
+  width: min(100%, 360px);
+  height: auto;
+  aspect-ratio: 1;
+}
+
+.qr-caption {
+  margin: 14px 0 4px;
+  font-weight: 600;
+}
+
+.qr-card label {
+  display: block;
+  margin-top: 14px;
+}
+
+.qr-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 14px;
+}
+
 /* ---- alerts ------------------------------------------------------------ */
 
 .alert {
