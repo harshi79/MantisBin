@@ -1,24 +1,38 @@
 {
   "name": "mantisbin",
-  "version": "1.0.0",
-  "description": "Stay sharp. Paste faster.",
-  "main": "server.js",
+  "version": "2.0.0",
+  "private": true,
   "type": "module",
+  "description": "MantisBin — Stay sharp. Paste faster. A minimal, fast paste-sharing utility for plain text and code.",
+  "license": "MIT",
+  "main": "src/worker.js",
   "scripts": {
-    "start": "node server.js",
-    "dev": "node --watch server.js"
+    "dev": "node scripts/dev.js",
+    "start": "node scripts/dev.js",
+    "test": "node --disable-warning=ExperimentalWarning --test tests/*.test.js",
+    "typecheck": "tsc --noEmit",
+    "build": "wrangler deploy --dry-run --outdir dist",
+    "deploy": "wrangler deploy",
+    "tail": "wrangler tail",
+    "clean-expired": "node scripts/cleanup.js"
+  },
+  "dependencies": {
+    "@libsql/client": "^0.18.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3",
+    "wrangler": "^4.131.2"
+  },
+  "engines": {
+    "node": ">=22.5.0"
   },
   "keywords": [
+    "pastebin",
     "paste",
-    "sharing",
+    "code",
+    "cloudflare-workers",
+    "turso",
+    "libsql",
     "minimal"
-  ],
-  "author": "",
-  "license": "MIT",
-  "dependencies": {
-    "better-sqlite3": "^12.11.1",
-    "express": "^5.2.1",
-    "rate-limiter-flexible": "^11.2.0",
-    "uuid": "^14.0.2"
-  }
+  ]
 }

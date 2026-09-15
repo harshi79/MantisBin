@@ -1,0 +1,33 @@
+{
+	// MantisBin — Cloudflare Worker configuration.
+	// Secrets are provided at deploy time, never committed:
+	//   wrangler secret put TURSO_DATABASE_URL
+	//   wrangler secret put TURSO_AUTH_TOKEN
+	//   wrangler secret put APP_SECRET
+	"$schema": "node_modules/wrangler/config-schema.json",
+	"name": "mantisbin",
+	"main": "src/worker.js",
+	"compatibility_date": "2026-01-01",
+	// Hourly cleanup of expired pastes, stale sessions and rate-limit buckets.
+	"triggers": {
+		"crons": [
+			"13 * * * *"
+		]
+	},
+	// Static files (app.css, app.js, robots.txt) are served straight from the
+	// edge; anything that does not match an asset is handled by the Worker.
+	"assets": {
+		"directory": "./public",
+		"not_found_handling": "none"
+	},
+	"vars": {
+		"SITE_URL": "https://mantisbin.example.com"
+	},
+	"observability": {
+		"enabled": true
+	},
+	"limits": {
+		// Large pastes (up to 10 MB) need real CPU time to validate + escape.
+		"cpu_ms": 30000
+	}
+}

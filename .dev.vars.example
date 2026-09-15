@@ -1,0 +1,19 @@
+# Copy to `.dev.vars` (gitignored) for local `wrangler dev`, or set real secrets with:
+#   wrangler secret put TURSO_DATABASE_URL
+#   wrangler secret put TURSO_AUTH_TOKEN
+#   wrangler secret put APP_SECRET
+
+# Turso / libSQL database. Required in production.
+# Get these from: `turso db show <name> --url` and `turso db tokens create <name>`
+TURSO_DATABASE_URL="libsql://your-db.turso.io"
+TURSO_AUTH_TOKEN="your-turso-auth-token"
+
+# Used to pseudonymise IPs for the view counter (HMAC). Generate with:
+#   node -e "console.log(crypto.randomUUID())"
+APP_SECRET="change-me-to-a-long-random-string"
+
+# --- Local Node dev server (scripts/dev.js) only ---
+# Leave DB_FILE unset (or ":memory:") to run without Turso credentials.
+# DB_FILE=".data/mantisbin.db"
+# PORT="8787"
+# HOST="0.0.0.0"
