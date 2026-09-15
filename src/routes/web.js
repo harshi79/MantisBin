@@ -17,7 +17,7 @@ import {
   sessionCookie,
 } from '../lib/auth.js';
 import { HttpError, headers, htmlResponse, parseForm, readBody, redirect, safeRedirectTarget, svgResponse, textResponse } from '../lib/http.js';
-import { renderCode } from '../lib/highlight.js';
+import { addLineAnchors, renderCode } from '../lib/highlight.js';
 import { faviconSvg, logoSvg, markSvg } from '../assets/mark.js';
 import {
   cleanText,
@@ -152,13 +152,14 @@ export async function view(ctx, params) {
   const oversized = paste.size > LIMITS.highlightMaxBytes;
   const contentHtml = oversized
     ? renderCode(paste.content, 'plaintext')
-    : renderCode(paste.content, paste.language);
+    : addLineAnchors(renderCode(paste.content, paste.language));
 
   const body = pastePage({
     ...pageCtx(ctx),
     paste: { ...paste, views },
     contentHtml,
     highlighted: !oversized,
+    lineNumbers: !oversized,
     share: ctx.url.searchParams.has('created'),
     absoluteUrl: `${ctx.url.origin}/p/${paste.id}`,
     isOwner: Boolean(ctx.user && paste.user_id !== null && Number(paste.user_id) === Number(ctx.user.id)),
@@ -171,11 +172,13 @@ export async function raw(ctx, params) {
   if (!isValidPasteId(params.id)) throw new HttpError(404);
   const paste = await getPaste(ctx.db, params.id, { content: true, now: ctx.now });
   if (!paste) throw new HttpError(404, 'This paste does not exist, or it expired and was deleted.');
+  const filename = `${safeFilename(paste.title)}.txt`;
+  const disposition = ctx.url.searchParams.get('download') === '1' ? 'attachment' : 'inline';
   return textResponse(
     paste.content,
     200,
     {
-      'Content-Disposition': `inline; filename="${safeFilename(paste.title)}.txt"`,
+      'Content-Disposition': `${disposition}; filename="${filename}"`,
       'X-Robots-Tag': 'noindex, nofollow',
     },
     { cache: 'private, max-age=60' },

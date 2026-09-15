@@ -65,7 +65,8 @@ X-API-Key: mb_…</code></pre>
       <p>
         Both <code>/api/pastes/:id/raw</code> and <code>/p/:id/raw</code> return the raw content with
         <code>Content-Type: text/plain; charset=utf-8</code> and <code>X-Content-Type-Options: nosniff</code>,
-        which makes them safe to pipe into scripts and terminals.
+        which makes them safe to pipe into scripts and terminals. Add <code>?download=1</code> to the
+        web route when you want an attachment with a safe title-derived filename; the API route stays inline.
       </p>
 
       <div class="endpoint"><span class="method method-get">GET</span> <code>/api/pastes/mine</code> <span class="muted small">— your pastes (API key required)</span></div>

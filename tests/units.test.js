@@ -2,7 +2,7 @@
 
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { escapeHtml, escapeWithLinks, renderCode, resolveLanguage } from '../src/lib/highlight.js';
+import { addLineAnchors, escapeHtml, escapeWithLinks, renderCode, resolveLanguage } from '../src/lib/highlight.js';
 import { esc, html, SafeHtml } from '../src/lib/html.js';
 import {
   PBKDF2_ITERATIONS,
@@ -78,6 +78,18 @@ test('highlighter covers the advertised language list without throwing', () => {
     assert.equal(typeof out, 'string');
     assert.ok(out.length > 0);
   }
+});
+
+test('line anchors preserve multiline token markup and provide stable ids', () => {
+  const rendered = renderCode('/* first line\nsecond line */\nreturn 42;', 'javascript');
+  const out = addLineAnchors(rendered);
+  assert.match(out, /id="line-1"/);
+  assert.match(out, /id="line-2"/);
+  assert.match(out, /id="line-3"/);
+  assert.match(out, /aria-label="Line 2"/);
+  assert.match(out, /<span class="t-com">\/\* first line<\/span>/);
+  assert.match(out, /<span class="t-com">second line \*\/<\/span>/);
+  assert.match(out, /class="t-num">42/);
 });
 
 test('language resolution is manual and forgiving', () => {

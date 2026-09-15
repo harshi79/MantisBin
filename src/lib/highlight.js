@@ -424,6 +424,70 @@ export function renderCode(content, languageId, options = {}) {
   }
 }
 
+/**
+ * Add lightweight, safe line wrappers around already-rendered highlighter HTML.
+ *
+ * The highlighter can emit a token span that crosses a newline (for example a
+ * multiline comment). This helper closes and reopens those generated tags at
+ * each line boundary, so every line can have its own stable anchor without
+ * breaking the token markup. It only receives HTML produced by this module.
+ *
+ * @param {string} renderedHtml
+ * @returns {string}
+ */
+export function addLineAnchors(renderedHtml) {
+  const tokens = String(renderedHtml).split(/(<\/?[a-z][^>]*>)/gi);
+  const openTags = [];
+  let line = 1;
+  let out = openLine(line);
+
+  for (const token of tokens) {
+    if (!token) continue;
+    if (token[0] === '<') {
+      const closing = /^<\/([a-z][a-z0-9]*)\s*>$/i.exec(token);
+      if (closing) {
+        out += token;
+        if (openTags.length) openTags.pop();
+        continue;
+      }
+
+      const opening = /^<([a-z][a-z0-9]*)\b[^>]*>$/i.exec(token);
+      if (opening) {
+        out += token;
+        if (!/\/\s*>$/.test(token)) openTags.push({ name: opening[1], tag: token });
+        continue;
+      }
+
+      // This is defensive: current renderers only emit span and a tags.
+      out += token;
+      continue;
+    }
+
+    const parts = token.split('\n');
+    for (let index = 0; index < parts.length; index++) {
+      out += parts[index];
+      if (index === parts.length - 1) continue;
+
+      for (let tagIndex = openTags.length - 1; tagIndex >= 0; tagIndex--) {
+        out += `</${openTags[tagIndex].name}>`;
+      }
+      out += '</span></span>';
+      line += 1;
+      out += openLine(line);
+      for (const tag of openTags) out += tag.tag;
+    }
+  }
+
+  for (let tagIndex = openTags.length - 1; tagIndex >= 0; tagIndex--) {
+    out += `</${openTags[tagIndex].name}>`;
+  }
+  return out + '</span></span>';
+}
+
+function openLine(line) {
+  return `<span class="code-line" id="line-${line}" data-line="${line}"><a class="line-number" href="#line-${line}" aria-label="Line ${line}">${line}</a><span class="line-content">`;
+}
+
 // ---------------------------------------------------------------------------
 // Generic token scanner
 // ---------------------------------------------------------------------------

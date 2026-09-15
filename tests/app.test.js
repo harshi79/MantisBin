@@ -28,6 +28,7 @@ test('homepage shows the editor immediately and no paste feed', async () => {
   assert.match(html, /<textarea/);
   assert.match(html, /name="title"/);
   assert.match(html, /name="expiration"/);
+  assert.match(html, /data-draft="new"/);
   assert.match(html, /MantisBin/);
   assert.doesNotMatch(html, /recent pastes|public feed/i);
   // The homepage is indexable (it is the product's public content).
@@ -50,15 +51,25 @@ test('create -> view -> raw round trip (anonymous)', async () => {
   assert.equal(view.headers.get('x-robots-tag'), 'noindex, nofollow');
   const viewHtml = await view.text();
   assert.match(viewHtml, /hello world/);
-  assert.match(viewHtml, /line one\nline two/);
+  assert.match(viewHtml, /line one/);
+  assert.match(viewHtml, /line two/);
   assert.match(viewHtml, /<a href="https:\/\/example.com\/a"/);
+  assert.match(viewHtml, /id="line-1"/);
+  assert.match(viewHtml, /id="line-2"/);
+  assert.match(viewHtml, /data-share/);
+  assert.match(viewHtml, /href="\/p\/[A-Za-z0-9]+\/raw\?download=1" download=/);
+  assert.doesNotMatch(viewHtml, /onclick=/i);
   assert.match(viewHtml, /name="robots" content="noindex, nofollow"/);
 
   const raw = await app.request(`/p/${id}/raw`);
   assert.equal(raw.status, 200);
   assert.match(raw.headers.get('content-type'), /text\/plain/);
+  assert.match(raw.headers.get('content-disposition'), /inline; filename="hello-world.txt"/);
   assert.equal(raw.headers.get('x-content-type-options'), 'nosniff');
   assert.equal(await raw.text(), 'line one\nline two\nhttps://example.com/a');
+
+  const download = await app.request(`/p/${id}/raw?download=1`);
+  assert.match(download.headers.get('content-disposition'), /attachment; filename="hello-world.txt"/);
   await app.close();
 });
 
@@ -514,6 +525,7 @@ test('docs page documents the API', async () => {
   const html = await res.text();
   assert.match(html, /\/api\/pastes/);
   assert.match(html, /Authorization: Bearer/);
+  assert.match(html, /download=1/);
   await app.close();
 });
 

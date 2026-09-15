@@ -30,7 +30,7 @@ export function editorPage(options) {
       <span class="tagline">${isEdit ? 'Same rules, same limits — save to update.' : SITE.tagline}</span>
     </div>
     ${alertBox(options.errors, options.okMessage)}
-    <form action="${action}" method="post" ${isEdit ? '' : html`data-remember="1"`} autocomplete="off">
+    <form action="${action}" method="post" ${isEdit ? '' : html`data-remember="1" data-draft="new"`} autocomplete="off">
       <div class="field">
         <label for="title">Title <span class="muted" aria-hidden="true">· required</span></label>
         <input
@@ -88,6 +88,12 @@ export function editorPage(options) {
           placeholder="Paste text or code here. URLs stay clickable, nothing is executed.">${values.content}</textarea>
         <div class="submit-row counter-row">
           <span class="counter" data-counter data-limit="${options.maxBytes}" aria-live="polite">0 B / ${formatBytes(options.maxBytes)}</span>
+        </div>
+        <div class="draft-tools" role="status">
+          <span data-draft-status>Drafts stay in this browser.</span>
+          <button class="btn btn-sm" type="button" data-draft-restore hidden>Restore draft</button>
+          <button class="btn btn-sm" type="button" data-draft-discard hidden>Discard</button>
+          <button class="btn btn-sm" type="button" data-draft-clear hidden>Clear saved draft</button>
         </div>
       </div>
 

@@ -3,8 +3,9 @@
  *   - instant theme switching (cookie + attribute, no reload)
  *   - live byte counter + Tab/Ctrl+Enter niceties in the editor
  *   - remembered language/font/size for the create form
- *   - copy-to-clipboard buttons and delete confirmations
- * No frameworks, no network calls.
+ *   - local draft recovery for the create form
+ *   - copy, share, select-all and delete-confirmation helpers
+ * No frameworks, no network calls, no inline event handlers.
  */
 (function () {
   'use strict';
@@ -45,15 +46,14 @@
   var editor = doc.querySelector('textarea[name="content"]');
   var counter = doc.querySelector('[data-counter]');
 
+  function byteLength(value) {
+    if (/[^\x00-\x7F]/.test(value)) return new TextEncoder().encode(value).length;
+    return value.length;
+  }
+
   function updateCounter() {
     if (!editor || !counter) return;
-    var value = editor.value;
-    var bytes;
-    if (/[^\x00-\x7F]/.test(value)) {
-      bytes = new TextEncoder().encode(value).length;
-    } else {
-      bytes = value.length;
-    }
+    var bytes = byteLength(editor.value);
     var limit = Number(counter.getAttribute('data-limit')) || 0;
     counter.textContent = formatBytes(bytes) + ' / ' + formatBytes(limit);
     counter.setAttribute('data-over', bytes > limit ? 'true' : 'false');
@@ -70,6 +70,7 @@
     editor.addEventListener('input', function () {
       if (timer) cancelAnimationFrame(timer);
       timer = requestAnimationFrame(updateCounter);
+      scheduleDraftSave();
     });
     updateCounter();
 
@@ -119,6 +120,7 @@
         } catch (e) {
           /* private mode */
         }
+        scheduleDraftSave();
       });
     });
 
@@ -139,7 +141,163 @@
     previewFont();
   }
 
-  /* ---- copy buttons ------------------------------------------------------ */
+  /* ---- local draft recovery --------------------------------------------- */
+
+  var DRAFT_KEY = 'mantisbin:draft:v1';
+  // Avoid repeatedly serialising a full multi-megabyte paste on every keystroke.
+  var DRAFT_MAX_BYTES = 1024 * 1024;
+  var draftForm = remember && remember.getAttribute('data-draft') ? remember : null;
+  var draftTimer = null;
+  var draftSubmitted = false;
+
+  function draftField(name) {
+    return draftForm ? draftForm.querySelector('[name="' + name + '"]') : null;
+  }
+
+  function readDraft() {
+    if (!draftForm) return null;
+    try {
+      var value = JSON.parse(localStorage.getItem(DRAFT_KEY) || 'null');
+      if (!value || typeof value !== 'object' || typeof value.content !== 'string') return null;
+      return value;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  function setDraftStatus(message) {
+    var status = draftForm && draftForm.querySelector('[data-draft-status]');
+    if (status) status.textContent = message;
+  }
+
+  function setDraftButtons(show) {
+    var restore = draftForm && draftForm.querySelector('[data-draft-restore]');
+    var discard = draftForm && draftForm.querySelector('[data-draft-discard]');
+    var clear = draftForm && draftForm.querySelector('[data-draft-clear]');
+    if (restore) restore.hidden = !show;
+    if (discard) discard.hidden = !show;
+    if (clear) clear.hidden = !show;
+  }
+
+  function clearDraft(updateUi) {
+    try {
+      localStorage.removeItem(DRAFT_KEY);
+    } catch (e) {
+      /* private mode */
+    }
+    if (updateUi !== false) {
+      setDraftButtons(false);
+      setDraftStatus('Draft cleared.');
+    }
+  }
+
+  function draftValues() {
+    return {
+      title: (draftField('title') || {}).value || '',
+      content: editor ? editor.value : '',
+      language: (draftField('language') || {}).value || 'plaintext',
+      font: (draftField('font') || {}).value || 'mono',
+      font_size: (draftField('font_size') || {}).value || '14',
+      expiration: (draftField('expiration') || {}).value || '1w',
+      savedAt: Date.now(),
+    };
+  }
+
+  function saveDraft() {
+    if (!draftForm || draftSubmitted || !editor) return;
+    var values = draftValues();
+    if (!values.title && !values.content) {
+      clearDraft(false);
+      setDraftButtons(false);
+      setDraftStatus('Drafts stay in this browser.');
+      return;
+    }
+    if (byteLength(values.content) > DRAFT_MAX_BYTES) {
+      clearDraft(false);
+      setDraftButtons(false);
+      setDraftStatus('This draft is over 1 MB and will not be autosaved.');
+      return;
+    }
+    try {
+      localStorage.setItem(DRAFT_KEY, JSON.stringify(values));
+      setDraftButtons(true);
+      setDraftStatus('Draft saved at ' + new Date(values.savedAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) + '.');
+    } catch (e) {
+      setDraftStatus('Draft autosave is unavailable in this browser.');
+    }
+  }
+
+  function scheduleDraftSave() {
+    if (!draftForm || draftSubmitted) return;
+    if (draftTimer) clearTimeout(draftTimer);
+    draftTimer = setTimeout(saveDraft, 650);
+  }
+
+  function restoreDraft(draft) {
+    var fields = ['title', 'language', 'font', 'font_size', 'expiration'];
+    fields.forEach(function (name) {
+      var field = draftField(name);
+      if (!field || draft[name] === undefined) return;
+      if (field.tagName === 'SELECT' && !Array.prototype.some.call(field.options, function (option) {
+        return option.value === String(draft[name]);
+      })) return;
+      field.value = String(draft[name]);
+      field.dispatchEvent(new Event('change'));
+    });
+    if (editor) {
+      editor.value = draft.content;
+      editor.dispatchEvent(new Event('input'));
+      editor.focus();
+    }
+    setDraftButtons(true);
+    setDraftStatus('Draft restored. Autosave is on.');
+  }
+
+  if (draftForm) {
+    var existingDraft = readDraft();
+    var restoreButton = draftForm.querySelector('[data-draft-restore]');
+    var discardButton = draftForm.querySelector('[data-draft-discard]');
+    var clearButton = draftForm.querySelector('[data-draft-clear]');
+
+    if (existingDraft && (existingDraft.title || existingDraft.content)) {
+      setDraftButtons(true);
+      var when = existingDraft.savedAt ? new Date(existingDraft.savedAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : 'earlier';
+      setDraftStatus('Unsaved draft found from ' + when + '.');
+    }
+    if (restoreButton) {
+      restoreButton.addEventListener('click', function () {
+        var draft = readDraft();
+        if (draft) restoreDraft(draft);
+      });
+    }
+    if (discardButton) {
+      discardButton.addEventListener('click', function () {
+        clearDraft();
+      });
+    }
+    if (clearButton) {
+      clearButton.addEventListener('click', function () {
+        clearDraft();
+      });
+    }
+    draftForm.addEventListener('submit', function () {
+      // Preserve the latest keystrokes while the request is in flight. The
+      // successful create redirect clears the draft; validation errors do not.
+      saveDraft();
+      draftSubmitted = true;
+    });
+    window.addEventListener('pagehide', function () {
+      if (!draftSubmitted) saveDraft();
+    });
+  }
+
+  // The create route marks a successful save with ?created=1. Clear only then,
+  // not on submit, so a validation error or failed request can still recover.
+  if (!draftForm && new URL(window.location.href).searchParams.get('created') === '1') {
+    clearDraft(false);
+  }
+
+  /* ---- copy and share buttons ------------------------------------------- */
 
   function copyText(text) {
     if (navigator.clipboard && window.isSecureContext) {
@@ -163,6 +321,24 @@
     });
   }
 
+  function canonicalUrl(includeHash) {
+    var url = new URL(window.location.href);
+    url.search = '';
+    if (!includeHash) url.hash = '';
+    return url.toString();
+  }
+
+  function textForSource(source) {
+    if (!source) return '';
+    var lines = source.querySelectorAll('.line-content');
+    if (lines.length) {
+      return Array.prototype.map.call(lines, function (line) {
+        return line.textContent;
+      }).join('\n');
+    }
+    return source.value !== undefined ? source.value : source.textContent;
+  }
+
   var copyButtons = doc.querySelectorAll('[data-copy]');
   for (var c = 0; c < copyButtons.length; c++) {
     copyButtons[c].addEventListener('click', function (event) {
@@ -170,7 +346,7 @@
       var selector = button.getAttribute('data-copy');
       var source = selector === 'self' ? null : doc.querySelector(selector);
       var text = button.getAttribute('data-copy-text');
-      if (!text && source) text = source.value !== undefined ? source.value : source.textContent;
+      if (!text && source) text = textForSource(source);
       if (text === null || text === undefined) return;
       copyText(text).then(
         function () {
@@ -180,6 +356,63 @@
           flash(button, 'Copy failed');
         },
       );
+    });
+  }
+
+  var locationButtons = doc.querySelectorAll('[data-copy-location]');
+  for (var l = 0; l < locationButtons.length; l++) {
+    locationButtons[l].addEventListener('click', function (event) {
+      var button = event.currentTarget;
+      copyText(canonicalUrl(true)).then(
+        function () {
+          flash(button, window.location.hash ? 'Line link copied' : 'Link copied');
+        },
+        function () {
+          flash(button, 'Copy failed');
+        },
+      );
+    });
+  }
+
+  var shareButtons = doc.querySelectorAll('[data-share]');
+  for (var s = 0; s < shareButtons.length; s++) {
+    shareButtons[s].addEventListener('click', function (event) {
+      var button = event.currentTarget;
+      var url = canonicalUrl(true);
+      if (navigator.share) {
+        try {
+          Promise.resolve(navigator.share({ title: doc.title, url: url })).then(
+            function () {
+              flash(button, 'Shared');
+            },
+            function (error) {
+              // Closing the native share sheet is not an error.
+              if (error && error.name === 'AbortError') return;
+              copyText(url).then(function () {
+                flash(button, 'Link copied');
+              });
+            },
+          );
+          return;
+        } catch (error) {
+          /* fall through to copy */
+        }
+      }
+      copyText(url).then(
+        function () {
+          flash(button, 'Link copied');
+        },
+        function () {
+          flash(button, 'Share unavailable');
+        },
+      );
+    });
+  }
+
+  var selectable = doc.querySelectorAll('[data-select-all]');
+  for (var a = 0; a < selectable.length; a++) {
+    selectable[a].addEventListener('focus', function (event) {
+      event.currentTarget.select();
     });
   }
 
