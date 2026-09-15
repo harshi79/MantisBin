@@ -1,6 +1,6 @@
 /** Lightweight, single-page API documentation. No portal, no SDKs. */
 
-import { EXPIRATIONS, LANGUAGES, LIMITS, RATE_LIMITS, SITE, UNLOCK_TTL_SECONDS } from '../config.js';
+import { BURN_MODES, EXPIRATIONS, LANGUAGES, LIMITS, RATE_LIMITS, SITE, UNLOCK_TTL_SECONDS } from '../config.js';
 import { html } from '../lib/html.js';
 import { formatBytes } from '../lib/validate.js';
 import { layout } from './layout.js';
@@ -50,6 +50,7 @@ X-API-Key: mb_…</code></pre>
           <tr><td><code>font</code> / <code>fontSize</code></td><td>string / number</td><td>optional viewer preferences</td></tr>
           <tr><td><code>expiresIn</code></td><td>string</td><td>optional: ${expirationOptions}; default <code>1w</code></td></tr>
           <tr><td><code>password</code></td><td>string</td><td>optional: ${LIMITS.passphraseMin}–${LIMITS.passphraseMax} chars; the paste is locked until it is entered</td></tr>
+          <tr><td><code>burnAfter</code></td><td>string</td><td>optional: ${BURN_MODES.map((mode) => `<code>${mode.id}</code>`).join(', ')}; default <code>never</code></td></tr>
         </tbody>
       </table>
       <pre><code>curl -sS -X POST ${base}/api/pastes \\
@@ -118,6 +119,42 @@ curl -sS -b jar.txt ${base}/api/pastes/a8Kx92Lm/raw    # and the raw bytes</code
         <code>protected</code> boolean, so clients can tell before asking for content.
       </p>
 
+      <h2 id="burn">Burn after reading</h2>
+      <p>
+        <code>burnAfter</code> turns a paste into a one-time link. Expiry is a deadline; burning is
+        consumption. The paste is deleted as it is handed out, so there is nothing left to fetch, no
+        view to count and nothing to leak later.
+      </p>
+      <table class="spec">
+        <thead><tr><th>Mode</th><th>Consumed by</th></tr></thead>
+        <tbody>
+          <tr><td><code>never</code> (default)</td><td>nothing — the paste lives until it expires</td></tr>
+          <tr><td><code>view</code></td><td>the first successful HTML view (<code>GET /p/:id</code>)</td></tr>
+          <tr><td><code>read</code></td><td>the first successful content read of any kind: <code>GET /p/:id</code>, <code>/p/:id/raw</code>, <code>GET /api/pastes/:id</code> or <code>/api/pastes/:id/raw</code></td></tr>
+        </tbody>
+      </table>
+      <pre><code>curl -sS -X POST ${base}/api/pastes \\
+  -H "Authorization: Bearer $MANTISBIN_KEY" \\
+  -H "Content-Type: application/json" \\
+  -d '{"title":"one time","content":"…","burnAfter":"read","expiresIn":"1d"}'
+# {"burnAfter":"read", …}
+
+curl -sS ${base}/api/pastes/a8Kx92Lm        # 200, the one and only read
+curl -sS ${base}/api/pastes/a8Kx92Lm        # 404 — it is gone</code></pre>
+      <p>
+        Reads are claimed with a single atomic conditional update, so concurrent requests cannot both
+        receive a one-time paste: exactly one caller gets the content and every other one gets
+        <code>404</code>. Only successful reads consume a paste — a lock screen, a wrong passphrase, a
+        <code>401</code>, a <code>404</code>, an expired paste or a rate-limited request leaves it
+        untouched. A one-time paste is one-time for its owner as well.
+      </p>
+      <p>
+        <code>PATCH /api/pastes/:id</code> manages the mode: omit <code>burnAfter</code> to keep it, send
+        <code>view</code>/<code>read</code> to arm it, or <code>null</code>/<code>never</code> to switch it
+        off. Answering a paste always includes its <code>burnAfter</code>, and unknown values are refused
+        with <code>400</code> rather than silently stored as "keep forever".
+      </p>
+
       <h2 id="shape">Paste object</h2>
       <pre><code>{
   "id": "a8Kx92Lm",
@@ -133,6 +170,7 @@ curl -sS -b jar.txt ${base}/api/pastes/a8Kx92Lm/raw    # and the raw bytes</code
   "updatedAt": "2026-09-14T10:12:00.000Z",
   "expiresAt": "2026-09-15T10:12:00.000Z",
   "protected": false,
+  "burnAfter": "never",
   "content": "ok\\nreally ok"
 }</code></pre>
       <p>List endpoints omit <code>content</code>. Timestamps are ISO 8601 UTC; <code>expiresAt</code> is <code>null</code> for “never”.</p>
@@ -140,7 +178,7 @@ curl -sS -b jar.txt ${base}/api/pastes/a8Kx92Lm/raw    # and the raw bytes</code
       <h2 id="errors">Errors</h2>
       <p>
         Errors use one shape: <code>{ "error": "message" }</code> with a sensible status code —
-        <code>400</code> invalid input, <code>401</code> missing/invalid key, <code>403</code> not your
+        <code>400</code> invalid input, <code>401</code> missing/invalid key or locked paste, <code>403</code> not your
         paste, <code>404</code> unknown/expired/deleted paste, <code>413</code> too large,
         <code>429</code> rate limited (with a <code>Retry-After</code> header), <code>500</code> our fault.
         Messages are safe to show to end users; internals are never included.
@@ -153,7 +191,7 @@ curl -sS -b jar.txt ${base}/api/pastes/a8Kx92Lm/raw    # and the raw bytes</code
         <li>Create (web): ${RATE_LIMITS.create.limit}/hour per IP or account. Create (API): ${RATE_LIMITS.apiCreate.limit}/hour per key.</li>
         <li>Reads (API): ${RATE_LIMITS.apiRead.limit}/hour per IP. Auth endpoints: ${RATE_LIMITS.auth.limit}/${Math.round(RATE_LIMITS.auth.window / 60)} min per IP.</li>
         <li>Paste passphrases: ${LIMITS.passphraseMin}–${LIMITS.passphraseMax} characters, stored as a PBKDF2-SHA256 hash. Unlocking lasts ${Math.round(UNLOCK_TTL_SECONDS / 60)} minutes and is capped at ${RATE_LIMITS.unlock.limit} attempts / ${Math.round(RATE_LIMITS.unlock.window / 60)} min per paste + IP.</li>
-        <li>View counts ignore repeat refreshes from the same visitor within 6 hours; a locked paste is never counted until it is unlocked.</li>
+        <li>View counts ignore repeat refreshes from the same visitor within 6 hours; a locked paste is never counted until it is unlocked, and a burn-after-reading paste is deleted as it is served.</li>
       </ul>
 
       <h2 id="languages">Languages</h2>

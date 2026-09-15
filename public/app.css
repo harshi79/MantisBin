@@ -632,6 +632,12 @@ kbd {
   background: var(--surface);
 }
 
+/* Helper text that belongs to a field inside a flex row. */
+.field-help {
+  flex-basis: 100%;
+  margin: 0;
+}
+
 /* Checkbox row (e.g. "remove the paste password"). */
 .check {
   display: flex;

@@ -4,6 +4,7 @@
  */
 
 import { LANGUAGES, SITE } from '../config.js';
+import { burnLabel } from '../lib/burn.js';
 import { html, raw } from '../lib/html.js';
 import { formatBytes, formatDateTime, formatNumber, relativeTime, safeFilename } from '../lib/validate.js';
 import { layout } from './layout.js';
@@ -54,6 +55,7 @@ export function pastePage(options) {
     <div class="meta">
       <span><b>${languageLabel(paste.language)}</b></span>
       ${paste.password_hash ? html`<span class="badge">password-protected</span>` : ''}
+      ${burnLabel(paste) ? html`<span class="badge badge-warn">${burnLabel(paste)}</span>` : ''}
       <span>${formatBytes(paste.size)} bytes</span>
       <span>${formatNumber(lines)} lines</span>
       <span title="${formatDateTime(paste.created_at)}">created ${relativeTime(paste.created_at)}</span>

@@ -56,6 +56,24 @@ export const EXPIRATIONS = [
 export const DEFAULT_EXPIRATION = '1w';
 
 /**
+ * Burn-after-reading modes (2.2 §2). Stored per paste as `pastes.burn_mode`:
+ *   never — the paste lives until it expires (default, unchanged behaviour)
+ *   view  — deleted after the first successful HTML view
+ *   read  — deleted after the first successful content read of any kind
+ *           (HTML view, /raw, or either API endpoint)
+ *
+ * Only *successful* reads count: a wrong passphrase, a 401/404, a rate-limited
+ * request, an expired paste or a lock screen never consumes a one-time paste.
+ */
+export const BURN_MODES = [
+  { id: 'never', label: 'Keep until it expires', short: 'until it expires' },
+  { id: 'view', label: 'Burn after the first view', short: 'burns after the first view' },
+  { id: 'read', label: 'Burn after the first read (view, raw or API)', short: 'burns after the first read' },
+];
+
+export const DEFAULT_BURN_MODE = 'never';
+
+/**
  * Fonts are system font stacks on purpose: zero downloads, zero layout shift,
  * works identically in the editor and the viewer.
  */

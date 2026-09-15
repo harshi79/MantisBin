@@ -2,7 +2,7 @@
  * Paste storage: creation, lookup, updates, ownership, views and expiration.
  */
 
-import { LIMITS, VIEW_DEDUPE_SECONDS } from '../config.js';
+import { DEFAULT_BURN_MODE, LIMITS, VIEW_DEDUPE_SECONDS } from '../config.js';
 import { hmacSha256Hex, randomToken } from './crypto.js';
 import { byteLength } from './validate.js';
 
@@ -13,7 +13,7 @@ import { byteLength } from './validate.js';
  * `content` is deliberately excluded from list queries — pastes can be 10 MB.
  */
 export const PASTE_META_COLUMNS =
-  'id, title, language, font, font_size, size, views, user_id, created_at, updated_at, expires_at, password_hash';
+  'id, title, language, font, font_size, size, views, user_id, created_at, updated_at, expires_at, password_hash, burn_mode, burned';
 
 /**
  * @typedef {object} Paste
@@ -30,6 +30,8 @@ export const PASTE_META_COLUMNS =
  * @property {number} updated_at
  * @property {number | null} expires_at
  * @property {string | null} [password_hash] PBKDF2 hash when the paste is protected
+ * @property {string} [burn_mode] 'never' | 'view' | 'read'
+ * @property {number} [burned] 1 once a one-time paste has been handed out
  */
 
 /**
@@ -37,7 +39,7 @@ export const PASTE_META_COLUMNS =
  * @param {{
  *   title: string, content: string, language: string, font: string,
  *   fontSize: number, expiresAt: number | null, userId?: number | null,
- *   passwordHash?: string | null, now?: number
+ *   passwordHash?: string | null, burnMode?: string, now?: number
  * }} input
  * @returns {Promise<Paste>}
  */
@@ -51,8 +53,8 @@ export async function createPaste(db, input) {
     try {
       await db.run(
         `INSERT INTO pastes
-           (id, title, content, language, font, font_size, size, views, user_id, created_at, updated_at, expires_at, password_hash)
-         VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?)`,
+           (id, title, content, language, font, font_size, size, views, user_id, created_at, updated_at, expires_at, password_hash, burn_mode, burned)
+         VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, 0)`,
         [
           id,
           input.title,
@@ -66,6 +68,7 @@ export async function createPaste(db, input) {
           now,
           input.expiresAt ?? null,
           input.passwordHash ?? null,
+          input.burnMode ?? DEFAULT_BURN_MODE,
         ],
       );
       return {
@@ -82,6 +85,8 @@ export async function createPaste(db, input) {
         updated_at: now,
         expires_at: input.expiresAt ?? null,
         password_hash: input.passwordHash ?? null,
+        burn_mode: input.burnMode ?? DEFAULT_BURN_MODE,
+        burned: 0,
       };
     } catch (error) {
       if (!isUniqueViolation(error) || attempt === 3) throw error;
@@ -107,6 +112,11 @@ export async function getPaste(db, id, options = {}) {
   const columns = options.content === false ? PASTE_META_COLUMNS : `${PASTE_META_COLUMNS}, content`;
   const paste = await db.get(`SELECT ${columns} FROM pastes WHERE id = ?`, [id]);
   if (!paste) return null;
+  // A consumed one-time paste is gone even if a winner died before deleting it.
+  if (Number(paste.burned) === 1) {
+    await deletePasteRows(db, id).catch(() => {});
+    return null;
+  }
   if (paste.expires_at !== null && Number(paste.expires_at) <= now) {
     await deletePasteRows(db, id);
     return null;
@@ -119,7 +129,8 @@ export async function getPaste(db, id, options = {}) {
  * to somebody else.
  *
  * `fields.passwordHash` is tri-state: `undefined` keeps the stored hash,
- * `null` removes the protection, a string replaces it.
+ * `null` removes the protection, a string replaces it. `fields.burnMode` is
+ * optional the same way (`undefined` keeps the current mode).
  * @param {Db} db
  */
 export async function updatePaste(db, id, userId, fields, now = Math.floor(Date.now() / 1000)) {
@@ -151,6 +162,10 @@ export async function updatePaste(db, id, userId, fields, now = Math.floor(Date.
   if (fields.passwordHash !== undefined) {
     assignments.push('password_hash = ?');
     params.push(fields.passwordHash);
+  }
+  if (fields.burnMode !== undefined) {
+    assignments.push('burn_mode = ?');
+    params.push(fields.burnMode);
   }
   params.push(id, userId);
 
@@ -188,7 +203,7 @@ export async function deletePasteRows(db, id) {
 export async function listUserPastes(db, userId, limit = 200, now = Math.floor(Date.now() / 1000)) {
   return db.all(
     `SELECT ${PASTE_META_COLUMNS} FROM pastes
-      WHERE user_id = ? AND (expires_at IS NULL OR expires_at > ?)
+      WHERE user_id = ? AND (expires_at IS NULL OR expires_at > ?) AND burned = 0
       ORDER BY created_at DESC LIMIT ?`,
     [userId, now, Math.min(Math.max(limit, 1), 500)],
   );
