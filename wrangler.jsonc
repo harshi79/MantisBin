@@ -4,7 +4,6 @@
 	//   wrangler secret put TURSO_DATABASE_URL
 	//   wrangler secret put TURSO_AUTH_TOKEN
 	//   wrangler secret put APP_SECRET
-    // hmm
 	"$schema": "node_modules/wrangler/config-schema.json",
 	"name": "mantisbin",
 	"main": "src/worker.js",
