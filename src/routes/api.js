@@ -22,6 +22,7 @@ import {
   FONTS,
   FONT_SIZES,
   LANGUAGES,
+  LANGUAGE_OPTIONS,
   LIMITS,
   RATE_LIMITS,
   SITE,
@@ -31,6 +32,7 @@ import {
 import { authenticateApiKey } from '../lib/auth.js';
 import { appSecret, canReadPaste } from '../lib/access.js';
 import { burnModeOf, claimBurnForRead } from '../lib/burn.js';
+import { detectLanguage } from '../lib/detect.js';
 import { HttpError, jsonResponse, parseJson, readBody, textResponse } from '../lib/http.js';
 import { consume } from '../lib/ratelimit.js';
 import {
@@ -47,7 +49,7 @@ import {
   normalizeExpiration,
   normalizeFont,
   normalizeFontSize,
-  normalizeLanguage,
+  normalizeLanguageChoice,
   expirationPresetFor,
   safeFilename,
   validateBurnMode,
@@ -151,6 +153,7 @@ export async function meta(ctx) {
     name: SITE.name,
     tagline: SITE.tagline,
     languages: LANGUAGES,
+    languageChoices: LANGUAGE_OPTIONS,
     fonts: FONTS.map((f) => ({ id: f.id, label: f.label })),
     fontSizes: FONT_SIZES,
     expirations: EXPIRATIONS.map((e) => ({ id: e.id, label: e.label, seconds: e.seconds })),
@@ -199,10 +202,12 @@ export async function create(ctx) {
     if (!check.ok) throw new HttpError(400, check.error);
     passwordHash = await hashPassphrase(String(check.value));
   }
+  const languageChoice = normalizeLanguageChoice(body.language);
+  const language = languageChoice === 'auto' ? detectLanguage(content.value, content.bytes) : languageChoice;
   const paste = await createPaste(ctx.db, {
     title: title.value,
     content: content.value,
-    language: normalizeLanguage(body.language),
+    language,
     font: normalizeFont(body.font),
     fontSize: normalizeFontSize(body.fontSize ?? body.font_size),
     expiresAt: expiration.expiresAt,
@@ -287,10 +292,12 @@ export async function fork(ctx, params) {
     passwordHash = await hashPassphrase(String(check.value));
   }
 
+  const copyLanguageChoice = normalizeLanguageChoice(overrides.language ?? source.language);
+  const copyLanguage = copyLanguageChoice === 'auto' ? detectLanguage(content.value, content.bytes) : copyLanguageChoice;
   const copy = await createPaste(ctx.db, {
     title: title.value,
     content: content.value,
-    language: normalizeLanguage(overrides.language ?? source.language),
+    language: copyLanguage,
     font: normalizeFont(overrides.font ?? source.font),
     fontSize: normalizeFontSize(overrides.fontSize ?? overrides.font_size ?? source.font_size),
     expiresAt: expiration.expiresAt,
@@ -435,6 +442,8 @@ export async function update(ctx, params) {
     }
   }
 
+  const languageChoice = body.language === undefined ? existing.language : normalizeLanguageChoice(body.language);
+  const language = languageChoice === 'auto' ? detectLanguage(content.value, content.bytes) : languageChoice;
   const result = await updatePaste(
     ctx.db,
     params.id,
@@ -442,7 +451,7 @@ export async function update(ctx, params) {
     {
       title: title.value,
       content: content.value,
-      language: normalizeLanguage(body.language ?? existing.language),
+      language,
       font: normalizeFont(body.font ?? existing.font),
       fontSize: normalizeFontSize(body.fontSize ?? body.font_size ?? existing.font_size),
       expiresAt: expiration.expiresAt,

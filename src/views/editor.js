@@ -11,7 +11,7 @@
  *            slot belongs to the create form.
  */
 
-import { BURN_MODES, EXPIRATIONS, FONTS, FONT_SIZES, LANGUAGES, LIMITS, SITE, UNLOCK_TTL_SECONDS } from '../config.js';
+import { BURN_MODES, EXPIRATIONS, FONTS, FONT_SIZES, LANGUAGE_OPTIONS, LIMITS, SITE, UNLOCK_TTL_SECONDS } from '../config.js';
 import { html } from '../lib/html.js';
 import { formatBytes } from '../lib/validate.js';
 import { alertBox, layout } from './layout.js';
@@ -74,7 +74,7 @@ export function editorPage(options) {
         <div class="field">
           <label for="language">Language</label>
           <select id="language" name="language">
-            ${LANGUAGES.map(
+            ${LANGUAGE_OPTIONS.map(
               (lang) =>
                 html`<option value="${lang.id}" ${values.language === lang.id ? html`selected` : ''}>${lang.label}</option>`,
             )}

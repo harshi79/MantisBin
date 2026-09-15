@@ -36,6 +36,7 @@ import {
   verifyPassphrase,
 } from '../lib/unlock.js';
 import { addLineAnchors, renderCode } from '../lib/highlight.js';
+import { canonicalPasteUrl, normalizeLineAnchor, qrSvg } from '../lib/qr.js';
 import { faviconSvg, logoSvg, markSvg } from '../assets/mark.js';
 import {
   cleanText,
@@ -44,7 +45,7 @@ import {
   normalizeExpiration,
   normalizeFont,
   normalizeFontSize,
-  normalizeLanguage,
+  normalizeLanguageChoice,
   safeFilename,
   validateBurnMode,
   validateContent,
@@ -62,9 +63,11 @@ import {
   visitorHash,
 } from '../lib/pastes.js';
 import { consume } from '../lib/ratelimit.js';
+import { detectLanguage } from '../lib/detect.js';
 import { RATE_LIMITS } from '../config.js';
 import { editorPage } from '../views/editor.js';
 import { pastePage } from '../views/paste.js';
+import { qrPage } from '../views/qr.js';
 import { unlockPage } from '../views/unlock.js';
 import { loginPage, registerPage } from '../views/auth.js';
 import { myPastesPage } from '../views/mypastes.js';
@@ -126,7 +129,8 @@ function readPasteInput(form, user, mode = 'create') {
   if (!title.ok) errors.push(title.error);
   const content = validateContent(form.content, maxBytesFor(user));
   if (!content.ok) errors.push(content.error);
-  const language = normalizeLanguage(form.language);
+  const languageChoice = normalizeLanguageChoice(form.language);
+  const language = languageChoice === 'auto' && content.ok ? detectLanguage(content.value, content.bytes) : languageChoice;
   const font = normalizeFont(form.font);
   const fontSize = normalizeFontSize(form.font_size ?? form.fontSize);
   const expiration = normalizeExpiration(form.expiration ?? form.expiresIn);
@@ -134,7 +138,18 @@ function readPasteInput(form, user, mode = 'create') {
   if (passphrase.error) errors.push(passphrase.error);
   const burnMode = validateBurnMode(form.burn_after);
   if (!burnMode.ok) errors.push(burnMode.error);
-  return { errors, title: title.ok ? title.value : String(form.title ?? '').slice(0, 200), content: content.ok ? content.value : String(form.content ?? ''), language, font, fontSize, expiration, passphrase: passphrase.state, burnMode: burnMode.ok ? burnMode.value : DEFAULT_BURN_MODE };
+  return {
+    errors,
+    title: title.ok ? title.value : String(form.title ?? '').slice(0, 200),
+    content: content.ok ? content.value : String(form.content ?? ''),
+    language,
+    languageChoice,
+    font,
+    fontSize,
+    expiration,
+    passphrase: passphrase.state,
+    burnMode: burnMode.ok ? burnMode.value : DEFAULT_BURN_MODE,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -182,7 +197,7 @@ export async function create(ctx) {
       values: {
         title: input.title,
         content: cleanText(form.content ?? ''),
-        language: input.language,
+        language: input.languageChoice,
         font: input.font,
         font_size: input.fontSize,
         expiration: input.expiration.id,
@@ -263,6 +278,60 @@ export async function view(ctx, params) {
     isOwner: isPasteOwner(paste, ctx.user),
   });
   return htmlResponse(body, 200, {}, { noindex: true });
+}
+
+/** GET /p/:id/qr — server-rendered QR page; generating a share link never reads or burns content. */
+export async function qr(ctx, params) {
+  if (!isValidPasteId(params.id)) throw new HttpError(404);
+  const paste = await getPaste(ctx.db, params.id, { content: false, now: ctx.now });
+  if (!paste) throw new HttpError(404, 'This paste does not exist, or it expired and was deleted.');
+  const anchor = normalizeLineAnchor(ctx.url.searchParams.get('line'));
+  const targetUrl = canonicalPasteUrl(ctx.url.origin, paste.id, anchor);
+  const query = anchor ? `?line=${anchor.slice('line-'.length)}` : '';
+  let image;
+  try {
+    image = qrSvg(targetUrl);
+  } catch {
+    throw new HttpError(400, 'This paste URL is too long to encode as a QR code.');
+  }
+  return htmlResponse(
+    qrPage({
+      ...pageCtx(ctx),
+      paste,
+      unlocked: await canReadPaste(ctx, paste),
+      targetUrl,
+      imagePath: `/p/${paste.id}/qr.svg${query}`,
+      downloadPath: `/p/${paste.id}/qr.svg${query}${query ? '&' : '?'}download=1`,
+      qrSvg: image,
+    }),
+    200,
+    {},
+    { noindex: true },
+  );
+}
+
+/** GET /p/:id/qr.svg — image-only QR endpoint; it has no paste-content read path. */
+export async function qrImage(ctx, params) {
+  if (!isValidPasteId(params.id)) throw new HttpError(404);
+  const paste = await getPaste(ctx.db, params.id, { content: false, now: ctx.now });
+  if (!paste) throw new HttpError(404, 'This paste does not exist, or it expired and was deleted.');
+  const anchor = normalizeLineAnchor(ctx.url.searchParams.get('line'));
+  const targetUrl = canonicalPasteUrl(ctx.url.origin, paste.id, anchor);
+  let image;
+  try {
+    image = qrSvg(targetUrl);
+  } catch {
+    throw new HttpError(400, 'This paste URL is too long to encode as a QR code.');
+  }
+  const disposition = ctx.url.searchParams.get('download') === '1' ? 'attachment' : 'inline';
+  return svgResponse(
+    image,
+    {
+      'Content-Disposition': `${disposition}; filename="mantisbin-${paste.id}-qr.svg"`,
+      'X-Robots-Tag': 'noindex, nofollow',
+    },
+    { cache: 'private, max-age=300', noindex: true },
+  );
 }
 
 /**
@@ -451,7 +520,7 @@ export async function editSave(ctx, params) {
       values: {
         title: input.title || full?.title || '',
         content: cleanText(form.content ?? ''),
-        language: input.language,
+        language: input.languageChoice,
         font: input.font,
         font_size: input.fontSize,
         expiration: input.expiration.id,

@@ -4,7 +4,7 @@
  * through one of these functions.
  */
 
-import { BURN_MODES, DEFAULT_BURN_MODE, DEFAULT_EXPIRATION, DEFAULT_FONT, DEFAULT_FONT_SIZE, DEFAULT_LANGUAGE, EXPIRATIONS, FONTS, FONT_SIZES, LANGUAGES, LIMITS } from '../config.js';
+import { AUTO_LANGUAGE, BURN_MODES, DEFAULT_BURN_MODE, DEFAULT_EXPIRATION, DEFAULT_FONT, DEFAULT_FONT_SIZE, DEFAULT_LANGUAGE, EXPIRATIONS, FONTS, FONT_SIZES, LANGUAGES, LIMITS } from '../config.js';
 
 const encoder = new TextEncoder();
 
@@ -128,11 +128,20 @@ export function burnModeLabel(value) {
   return found ? found.label : '';
 }
 
-/** Whitelist a language id. */
+/** Whitelist a stored/manual language id. `auto` is not a stored language. */
 export function normalizeLanguage(value) {
   const id = typeof value === 'string' ? value.toLowerCase().trim() : '';
   if (id && LANGUAGES.some((l) => l.id === id)) return id;
   return DEFAULT_LANGUAGE;
+}
+
+/**
+ * Whitelist the editor/API language choice while preserving the auto sentinel.
+ * Callers must resolve `auto` against the submitted content before storage.
+ */
+export function normalizeLanguageChoice(value) {
+  const id = typeof value === 'string' ? value.toLowerCase().trim() : '';
+  return id === AUTO_LANGUAGE ? AUTO_LANGUAGE : normalizeLanguage(id);
 }
 
 /** Whitelist a font id. */

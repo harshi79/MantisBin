@@ -40,6 +40,7 @@ export function pastePage(options) {
         <a class="btn btn-sm" href="/p/${paste.id}/raw?download=1" download="${safeFilename(paste.title)}.txt">Download</a>
         <a class="btn btn-sm" href="/p/${paste.id}/fork" title="Create a copy of this paste">Duplicate</a>
         <button class="btn btn-sm" type="button" data-share>Share</button>
+        <a class="btn btn-sm" href="/p/${paste.id}/qr" data-qr-link title="Share this paste as a QR code">QR</a>
         ${options.lineNumbers ? html`<button class="btn btn-sm" type="button" data-copy-location>Copy line link</button>` : ''}
         <button class="btn btn-sm" type="button" data-wrap-toggle="#paste-content" aria-pressed="false">Wrap</button>
         ${
