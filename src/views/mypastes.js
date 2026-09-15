@@ -70,7 +70,7 @@ export function myPastesPage(options) {
             <b>Copy your new API key now — it is shown only once.</b>
             <div class="share">
               <label class="sr-only" for="new-key">New API key</label>
-              <input id="new-key" type="text" readonly value="${options.newKey}" onclick="this.select()">
+              <input id="new-key" type="text" readonly value="${options.newKey}" data-select-all>
               <button class="btn btn-sm btn-primary" type="button" data-copy="#new-key">Copy key</button>
             </div>
           </div>`

@@ -5,7 +5,7 @@
 
 import { LANGUAGES, SITE } from '../config.js';
 import { html, raw } from '../lib/html.js';
-import { formatBytes, formatDateTime, formatNumber, relativeTime } from '../lib/validate.js';
+import { formatBytes, formatDateTime, formatNumber, relativeTime, safeFilename } from '../lib/validate.js';
 import { layout } from './layout.js';
 
 function languageLabel(id) {
@@ -18,6 +18,7 @@ function languageLabel(id) {
  *   paste: any,
  *   contentHtml: string,
  *   highlighted: boolean,
+ *   lineNumbers?: boolean,
  *   share?: boolean,
  *   absoluteUrl: string,
  *   isOwner: boolean,
@@ -35,6 +36,9 @@ export function pastePage(options) {
       <div class="actions">
         <button class="btn btn-sm" type="button" data-copy="#paste-content">Copy</button>
         <a class="btn btn-sm" href="/p/${paste.id}/raw">Raw</a>
+        <a class="btn btn-sm" href="/p/${paste.id}/raw?download=1" download="${safeFilename(paste.title)}.txt">Download</a>
+        <button class="btn btn-sm" type="button" data-share>Share</button>
+        ${options.lineNumbers ? html`<button class="btn btn-sm" type="button" data-copy-location>Copy line link</button>` : ''}
         <button class="btn btn-sm" type="button" data-wrap-toggle="#paste-content" aria-pressed="false">Wrap</button>
         ${
           options.isOwner
@@ -63,7 +67,7 @@ export function pastePage(options) {
         ? html`<div class="alert alert-ok" role="status">
             <div class="share">
               <label class="sr-only" for="share-url">Paste URL</label>
-              <input id="share-url" type="text" readonly value="${options.absoluteUrl}" onclick="this.select()">
+              <input id="share-url" type="text" readonly value="${options.absoluteUrl}" data-select-all>
               <button class="btn btn-sm btn-primary" type="button" data-copy="#share-url">Copy link</button>
               <a class="btn btn-sm" href="/p/${paste.id}">Open</a>
             </div>

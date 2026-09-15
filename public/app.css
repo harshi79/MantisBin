@@ -533,6 +533,20 @@ textarea {
   color: var(--danger);
 }
 
+.draft-tools {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 7px;
+  color: var(--muted);
+  font-size: 12.5px;
+}
+
+.draft-tools [data-draft-status] {
+  margin-right: auto;
+}
+
 /* ---- buttons ----------------------------------------------------------- */
 
 .btn {
@@ -728,6 +742,42 @@ pre.code {
   overflow-wrap: normal;
   tab-size: 4;
   font-variant-ligatures: none;
+}
+
+.code-line {
+  display: block;
+  min-height: 1.55em;
+}
+
+.line-number {
+  display: inline-block;
+  width: 3.5em;
+  margin-right: 1em;
+  color: var(--muted);
+  text-align: right;
+  text-decoration: none;
+  user-select: none;
+  font-size: 0.9em;
+  opacity: 0.75;
+}
+
+.line-number:hover {
+  color: var(--accent);
+  opacity: 1;
+  text-decoration: underline;
+}
+
+.line-content {
+  white-space: inherit;
+}
+
+.code-line:target {
+  background: var(--accent-soft);
+  box-shadow: 0 0 0 4px var(--accent-soft);
+}
+
+pre.code.wrap .line-content {
+  overflow-wrap: anywhere;
 }
 
 pre.code.wrap {
