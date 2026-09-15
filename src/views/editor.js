@@ -1,6 +1,14 @@
 /**
  * The paste editor — the entire homepage is this form.
- * Shared by "new paste" and "edit paste".
+ *
+ * Three modes share one form:
+ *   create — the homepage, posts to /p
+ *   edit   — an owned paste, posts to /p/:id/edit
+ *   fork   — "duplicate this paste", pre-filled from the source and posting to
+ *            the *normal* create endpoint, so a copy is an ordinary paste created
+ *            by the actor (own id, own limits, own ownership, own expiration).
+ *            Draft autosave is deliberately off here: the create form's draft
+ *            slot belongs to the create form.
  */
 
 import { BURN_MODES, EXPIRATIONS, FONTS, FONT_SIZES, LANGUAGES, LIMITS, SITE, UNLOCK_TTL_SECONDS } from '../config.js';
@@ -11,7 +19,7 @@ import { alertBox, layout } from './layout.js';
 /**
  * @param {{
  *   theme: string, user: any, path: string,
- *   mode: 'create' | 'edit',
+ *   mode: 'create' | 'edit' | 'fork',
  *   pasteId?: string,
  *   values: { title: string, content: string, language: string, font: string, font_size: number, expiration: string,
  *             burn_after?: string, protected?: boolean },
@@ -22,16 +30,31 @@ import { alertBox, layout } from './layout.js';
 export function editorPage(options) {
   const { values, mode } = options;
   const isEdit = mode === 'edit';
+  const isFork = mode === 'fork';
   const action = isEdit ? `/p/${options.pasteId}/edit` : '/p';
-  const heading = isEdit ? 'Edit paste' : 'New paste';
+  const heading = isEdit ? 'Edit paste' : isFork ? 'Duplicate paste' : 'New paste';
+  const tagline = isEdit
+    ? 'Same rules, same limits — save to update.'
+    : isFork
+      ? 'Edit anything you like — saving creates a new paste, the original is untouched.'
+      : SITE.tagline;
 
   const body = html`
     <div class="home-head">
       <h1>${heading}</h1>
-      <span class="tagline">${isEdit ? 'Same rules, same limits — save to update.' : SITE.tagline}</span>
+      <span class="tagline">${tagline}</span>
     </div>
     ${alertBox(options.errors, options.okMessage)}
-    <form action="${action}" method="post" ${isEdit ? '' : html`data-remember="1" data-draft="new"`} autocomplete="off">
+    ${
+      isFork
+        ? html`<div class="notice">
+            Copying <b>${values.title}</b>. The copy gets its own URL, its own expiration and its own view
+            count, and it belongs to whoever saves it now. Passwords are never copied (the server cannot read
+            them back) — set a new one below if the copy should be protected too.
+          </div>`
+        : ''
+    }
+    <form action="${action}" method="post" ${isEdit || isFork ? '' : html`data-remember="1" data-draft="new"`} autocomplete="off">
       <div class="field">
         <label for="title">Title <span class="muted" aria-hidden="true">· required</span></label>
         <input
@@ -150,15 +173,20 @@ export function editorPage(options) {
         </p>
         <div class="spacer"></div>
         <span class="muted small">Tip: <kbd>Ctrl</kbd> + <kbd>Enter</kbd> saves</span>
-        ${isEdit ? html`<a class="btn" href="/p/${options.pasteId}">Cancel</a>` : ''}
-        <button class="btn btn-primary" type="submit">${isEdit ? 'Save changes' : 'Save paste'}</button>
+        ${isEdit || isFork ? html`<a class="btn" href="/p/${options.pasteId}">Cancel</a>` : ''}
+        <button class="btn btn-primary" type="submit">${isEdit ? 'Save changes' : isFork ? 'Save copy' : 'Save paste'}</button>
       </div>
     </form>
   `;
 
   return layout({
-    title: isEdit ? `Edit — ${values.title || 'paste'} · ${SITE.name}` : `${SITE.name} — ${SITE.tagline}`,
-    description: SITE.description,
+    title: isEdit
+      ? `Edit — ${values.title || 'paste'} · ${SITE.name}`
+      : isFork
+        ? `Duplicate — ${values.title || 'paste'} · ${SITE.name}`
+        : `${SITE.name} — ${SITE.tagline}`,
+    description: isFork ? `Duplicate a paste on ${SITE.name}.` : SITE.description,
+    noindex: isFork,
     theme: options.theme,
     user: options.user,
     active: 'home',

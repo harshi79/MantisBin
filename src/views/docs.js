@@ -71,6 +71,41 @@ X-API-Key: mb_…</code></pre>
         web route when you want an attachment with a safe title-derived filename; the API route stays inline.
       </p>
 
+      <h2 id="fork">Duplicating a paste</h2>
+      <div class="endpoint"><span class="method">POST</span> <code>/api/pastes/:id/fork</code> <span class="muted small">— copy a paste (public; a key makes the copy owned)</span></div>
+      <p>
+        The copy is a brand-new paste: new random id, own URL, own expiration, own view count, own
+        password and burn settings. The source keeps its URL, content, expiration, view count and owner —
+        nothing about it is modified. Ownership follows the actor: with an API key the copy belongs to that
+        account (10 MB limit, manageable with the same key), without one it is an anonymous paste
+        (5 MB, 60 copies/hour per IP).
+      </p>
+      <table class="spec">
+        <thead><tr><th>Field (all optional)</th><th>Default</th></tr></thead>
+        <tbody>
+          <tr><td><code>title</code></td><td>the source title</td></tr>
+          <tr><td><code>language</code> / <code>font</code> / <code>fontSize</code></td><td>the source's viewer settings</td></tr>
+          <tr><td><code>expiresIn</code></td><td>the source's remaining lifetime, rounded up to the next preset</td></tr>
+          <tr><td><code>password</code></td><td><code>null</code> — passwords are never copied (they cannot be read back)</td></tr>
+          <tr><td><code>burnAfter</code></td><td><code>never</code></td></tr>
+        </tbody>
+      </table>
+      <pre><code>curl -sS -X POST ${base}/api/pastes/a8Kx92Lm/fork \\
+  -H "Authorization: Bearer $MANTISBIN_KEY" \\
+  -H "Content-Type: application/json" \\
+  -d '{"title":"copy of it","expiresIn":"1h","burnAfter":"read"}'
+# 201 {"id":"Zt4Qm1Px","title":"copy of it", …}
+
+curl -sS -X POST ${base}/api/pastes/a8Kx92Lm/fork   # no key: an anonymous copy</code></pre>
+      <p>
+        The content always comes from the source, so <code>content</code> is refused with <code>400</code>.
+        A protected source must be unlocked first (<code>401</code> otherwise, and the browser flow shows the
+        unlock screen and returns to the duplicate page afterwards); the owner's session or key never needs
+        the passphrase. A burn-after-reading source is <b>consumed</b> by copying it, exactly as a read
+        would be. In the browser, "Duplicate" on a paste view opens the ordinary editor pre-filled, so you
+        can change anything before saving — no API key required.
+      </p>
+
       <div class="endpoint"><span class="method method-get">GET</span> <code>/api/pastes/mine</code> <span class="muted small">— your pastes (API key required)</span></div>
       <div class="endpoint"><span class="method">PATCH</span> <code>/api/pastes/:id</code> <span class="muted small">— update your paste (API key required)</span></div>
       <div class="endpoint"><span class="method">DELETE</span> <code>/api/pastes/:id</code> <span class="muted small">— delete your paste (API key required)</span></div>
@@ -188,7 +223,7 @@ curl -sS ${base}/api/pastes/a8Kx92Lm        # 404 — it is gone</code></pre>
       <ul>
         <li>Anonymous: ${formatBytes(LIMITS.anonMaxBytes)} per paste. With an API key or account: ${formatBytes(LIMITS.userMaxBytes)}.</li>
         <li>Paste IDs are ${LIMITS.idLength} random base62 characters; there are no custom URLs and no sequential ids.</li>
-        <li>Create (web): ${RATE_LIMITS.create.limit}/hour per IP or account. Create (API): ${RATE_LIMITS.apiCreate.limit}/hour per key.</li>
+        <li>Create (web): ${RATE_LIMITS.create.limit}/hour per IP or account. Create (API): ${RATE_LIMITS.apiCreate.limit}/hour per key. Copies count against the same limits (anonymous copies against the IP, keyed copies against the key).</li>
         <li>Reads (API): ${RATE_LIMITS.apiRead.limit}/hour per IP. Auth endpoints: ${RATE_LIMITS.auth.limit}/${Math.round(RATE_LIMITS.auth.window / 60)} min per IP.</li>
         <li>Paste passphrases: ${LIMITS.passphraseMin}–${LIMITS.passphraseMax} characters, stored as a PBKDF2-SHA256 hash. Unlocking lasts ${Math.round(UNLOCK_TTL_SECONDS / 60)} minutes and is capped at ${RATE_LIMITS.unlock.limit} attempts / ${Math.round(RATE_LIMITS.unlock.window / 60)} min per paste + IP.</li>
         <li>View counts ignore repeat refreshes from the same visitor within 6 hours; a locked paste is never counted until it is unlocked, and a burn-after-reading paste is deleted as it is served.</li>

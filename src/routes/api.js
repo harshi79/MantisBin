@@ -8,6 +8,7 @@
  *   DELETE /api/pastes/:id      delete own (API key)
  *   GET    /api/pastes/:id/raw  raw text (public)
  *   POST   /api/pastes/:id/unlock  unlock a password-protected paste (public)
+ *   POST   /api/pastes/:id/fork    copy a paste (public; a key makes the copy owned)
  *   (both reads consume a burn-after-reading paste in `read` mode)
  *   GET    /api/meta            vocabularies + limits (public)
  *   GET    /api/health          liveness (public)
@@ -47,6 +48,7 @@ import {
   normalizeFont,
   normalizeFontSize,
   normalizeLanguage,
+  expirationPresetFor,
   safeFilename,
   validateBurnMode,
   validateContent,
@@ -220,6 +222,85 @@ export async function mine(ctx) {
   return jsonResponse({
     pastes: pastes.map((paste) => serializePaste(paste, ctx.url.origin)),
   });
+}
+
+/**
+ * POST /api/pastes/:id/fork — copy a paste.
+ *
+ * The actor decides the owner: a valid API key produces a copy owned by that
+ * account (10 MB limit, same key manages it), no key produces an anonymous copy
+ * (5 MB). The body is optional; any of `title`, `language`, `font`, `fontSize`,
+ * `expiresIn`, `password` and `burnAfter` may override the copied value. The
+ * content itself always comes from the source — forking a paste you cannot read
+ * is a 401, never a partial copy, and a one-time source is consumed by the fork.
+ */
+export async function fork(ctx, params) {
+  if (!isValidPasteId(params.id)) throw new HttpError(404, 'Unknown paste id.');
+
+  // Same buckets as creating a paste with the same actor.
+  const key = keyFromRequest(ctx.request);
+  const auth = key ? await requireKey(ctx) : null;
+  const verdict = await consume(
+    ctx.db,
+    auth ? `apicreate:key:${auth.key.id}` : `create:ip:${ctx.ip}`,
+    auth ? RATE_LIMITS.apiCreate : RATE_LIMITS.create,
+  );
+  if (!verdict.ok) {
+    throw new HttpError(
+      429,
+      auth ? 'Rate limit exceeded for this API key.' : 'Too many pastes created. Try again later.',
+      { 'Retry-After': String(verdict.retryAfter) },
+    );
+  }
+
+  const source = await getPaste(ctx.db, params.id, { content: true, now: ctx.now });
+  if (!source) throw new HttpError(404, 'Paste not found, expired or deleted.');
+  if (!(await canReadPaste(ctx, source)) && !(await apiKeyOwnsPaste(ctx, source))) throw protectedError();
+  if (!(await claimBurnForRead(ctx.db, source, 'view'))) throw burnedAway();
+
+  const raw = await readBody(ctx.request, 64 * 1024);
+  const overrides = raw.trim() === '' ? {} : parseJson(raw);
+  if (overrides.content !== undefined) {
+    throw new HttpError(400, 'The copy is made from the source content; use POST /api/pastes to paste new content.');
+  }
+
+  const title = overrides.title === undefined ? { ok: true, value: source.title } : validateTitle(overrides.title);
+  if (!title.ok) throw new HttpError(400, title.error);
+  const content = validateContent(source.content, maxBytesFor(auth?.user ?? null));
+  if (!content.ok) throw new HttpError(413, content.error);
+
+  const expiration =
+    overrides.expiresIn === undefined && overrides.expiration === undefined
+      ? { expiresAt: normalizeExpiration(expirationPresetFor(source.expires_at, ctx.now), ctx.now).expiresAt }
+      : normalizeExpiration(overrides.expiresIn ?? overrides.expiration, ctx.now);
+
+  const burnAfter = overrides.burnAfter === undefined && overrides.burn_after === undefined
+    ? { ok: true, value: DEFAULT_BURN_MODE }
+    : validateBurnMode(overrides.burnAfter ?? overrides.burn_after);
+  if (!burnAfter.ok) throw new HttpError(400, burnAfter.error);
+
+  let passwordHash = null;
+  const passphrase = readPasswordInput(overrides);
+  if (passphrase.value !== undefined && passphrase.value !== null && passphrase.value !== '') {
+    const check = validatePassphrase(passphrase.value);
+    if (!check.ok) throw new HttpError(400, check.error);
+    passwordHash = await hashPassphrase(String(check.value));
+  }
+
+  const copy = await createPaste(ctx.db, {
+    title: title.value,
+    content: content.value,
+    language: normalizeLanguage(overrides.language ?? source.language),
+    font: normalizeFont(overrides.font ?? source.font),
+    fontSize: normalizeFontSize(overrides.fontSize ?? overrides.font_size ?? source.font_size),
+    expiresAt: expiration.expiresAt,
+    userId: auth ? auth.user.id : null,
+    passwordHash,
+    burnMode: burnAfter.value,
+    now: ctx.now,
+  });
+
+  return jsonResponse(serializePaste(copy, ctx.url.origin), 201, {}, { noindex: true });
 }
 
 /** GET /api/pastes/:id */
