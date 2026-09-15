@@ -53,6 +53,7 @@ export function pastePage(options) {
 
     <div class="meta">
       <span><b>${languageLabel(paste.language)}</b></span>
+      ${paste.password_hash ? html`<span class="badge">password-protected</span>` : ''}
       <span>${formatBytes(paste.size)} bytes</span>
       <span>${formatNumber(lines)} lines</span>
       <span title="${formatDateTime(paste.created_at)}">created ${relativeTime(paste.created_at)}</span>

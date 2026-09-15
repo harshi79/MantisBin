@@ -191,6 +191,8 @@
     }
   }
 
+  // The passphrase field is deliberately absent here (and from restoreDraft):
+  // local drafts are plain-text in localStorage, so secrets never go in them.
   function draftValues() {
     return {
       title: (draftField('title') || {}).value || '',

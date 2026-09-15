@@ -3,7 +3,7 @@
  * Shared by "new paste" and "edit paste".
  */
 
-import { EXPIRATIONS, FONTS, FONT_SIZES, LANGUAGES, LIMITS, SITE } from '../config.js';
+import { EXPIRATIONS, FONTS, FONT_SIZES, LANGUAGES, LIMITS, SITE, UNLOCK_TTL_SECONDS } from '../config.js';
 import { html } from '../lib/html.js';
 import { formatBytes } from '../lib/validate.js';
 import { alertBox, layout } from './layout.js';
@@ -13,7 +13,8 @@ import { alertBox, layout } from './layout.js';
  *   theme: string, user: any, path: string,
  *   mode: 'create' | 'edit',
  *   pasteId?: string,
- *   values: { title: string, content: string, language: string, font: string, font_size: number, expiration: string },
+ *   values: { title: string, content: string, language: string, font: string, font_size: number, expiration: string,
+ *             protected?: boolean },
  *   errors?: string[], okMessage?: string,
  *   maxBytes: number,
  * }} options
@@ -95,6 +96,34 @@ export function editorPage(options) {
           <button class="btn btn-sm" type="button" data-draft-discard hidden>Discard</button>
           <button class="btn btn-sm" type="button" data-draft-clear hidden>Clear saved draft</button>
         </div>
+      </div>
+
+      <div class="field editor-block">
+        <label for="password">Password <span class="muted">· optional, hides the paste until it is entered</span></label>
+        <input
+          id="password"
+          name="password"
+          type="password"
+          maxlength="${LIMITS.passphraseMax}"
+          autocomplete="new-password"
+          spellcheck="false"
+          ${isEdit ? html`placeholder="Leave empty to keep the current password"` : html`placeholder="Leave empty for an unprotected paste"`}>
+        <p class="muted small">
+          ${
+            isEdit
+              ? html`Leaving this empty keeps the current protection. At least ${LIMITS.passphraseMin} characters to set a new one.`
+              : html`At least ${LIMITS.passphraseMin} characters. Only a PBKDF2 hash is stored; the password never appears in the URL, in HTML or in logs.`
+          }
+          Unlocking lasts ${Math.round(UNLOCK_TTL_SECONDS / 60)} minutes.
+        </p>
+        ${
+          isEdit && values.protected
+            ? html`<label class="check">
+                <input type="checkbox" name="remove_password" value="1">
+                <span>Remove the current password (make this paste public again)</span>
+              </label>`
+            : ''
+        }
       </div>
 
       <div class="submit-row">

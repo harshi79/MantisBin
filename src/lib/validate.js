@@ -83,6 +83,26 @@ export function validatePassword(value) {
   return { ok: true, value };
 }
 
+/**
+ * Optional per-paste passphrase (2.2 §1). Unlike account passwords there is no
+ * complexity rule — it is a shared handoff code — but it may not be blank and
+ * is byte-capped so hashing stays bounded. The value is never trimmed: spaces
+ * are part of the secret.
+ * @returns {Result}
+ */
+export function validatePassphrase(value) {
+  if (typeof value !== 'string' || value.trim().length === 0) {
+    return { ok: false, error: 'Passphrase cannot be blank. Leave the field empty to skip protection.' };
+  }
+  if (value.length < LIMITS.passphraseMin) {
+    return { ok: false, error: `Passphrase must be at least ${LIMITS.passphraseMin} characters.` };
+  }
+  if (value.length > LIMITS.passphraseMax) {
+    return { ok: false, error: `Passphrase must be ${LIMITS.passphraseMax} characters or fewer.` };
+  }
+  return { ok: true, value };
+}
+
 /** Whitelist a language id. */
 export function normalizeLanguage(value) {
   const id = typeof value === 'string' ? value.toLowerCase().trim() : '';

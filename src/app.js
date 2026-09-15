@@ -46,6 +46,7 @@ const ROUTE_TABLE = [
   ['GET', '/', web.home],
   ['POST', '/p', web.create],
   ['GET', '/p/:id', web.view],
+  ['POST', '/p/:id/unlock', web.unlock],
   ['GET', '/p/:id/raw', web.raw],
   ['GET', '/p/:id/edit', web.editForm],
   ['POST', '/p/:id/edit', web.editSave],
@@ -71,6 +72,7 @@ const ROUTE_TABLE = [
   ['PATCH', '/api/pastes/:id', api.update],
   ['DELETE', '/api/pastes/:id', api.remove],
   ['GET', '/api/pastes/:id/raw', api.raw],
+  ['POST', '/api/pastes/:id/unlock', api.unlock],
 ];
 
 const ROUTES = ROUTE_TABLE.map(([method, pattern, handler]) => ({

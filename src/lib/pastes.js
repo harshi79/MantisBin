@@ -13,7 +13,7 @@ import { byteLength } from './validate.js';
  * `content` is deliberately excluded from list queries — pastes can be 10 MB.
  */
 export const PASTE_META_COLUMNS =
-  'id, title, language, font, font_size, size, views, user_id, created_at, updated_at, expires_at';
+  'id, title, language, font, font_size, size, views, user_id, created_at, updated_at, expires_at, password_hash';
 
 /**
  * @typedef {object} Paste
@@ -29,13 +29,15 @@ export const PASTE_META_COLUMNS =
  * @property {number} created_at
  * @property {number} updated_at
  * @property {number | null} expires_at
+ * @property {string | null} [password_hash] PBKDF2 hash when the paste is protected
  */
 
 /**
  * @param {Db} db
  * @param {{
  *   title: string, content: string, language: string, font: string,
- *   fontSize: number, expiresAt: number | null, userId?: number | null, now?: number
+ *   fontSize: number, expiresAt: number | null, userId?: number | null,
+ *   passwordHash?: string | null, now?: number
  * }} input
  * @returns {Promise<Paste>}
  */
@@ -49,8 +51,8 @@ export async function createPaste(db, input) {
     try {
       await db.run(
         `INSERT INTO pastes
-           (id, title, content, language, font, font_size, size, views, user_id, created_at, updated_at, expires_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?)`,
+           (id, title, content, language, font, font_size, size, views, user_id, created_at, updated_at, expires_at, password_hash)
+         VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?)`,
         [
           id,
           input.title,
@@ -63,6 +65,7 @@ export async function createPaste(db, input) {
           now,
           now,
           input.expiresAt ?? null,
+          input.passwordHash ?? null,
         ],
       );
       return {
@@ -78,6 +81,7 @@ export async function createPaste(db, input) {
         created_at: now,
         updated_at: now,
         expires_at: input.expiresAt ?? null,
+        password_hash: input.passwordHash ?? null,
       };
     } catch (error) {
       if (!isUniqueViolation(error) || attempt === 3) throw error;
@@ -113,6 +117,9 @@ export async function getPaste(db, id, options = {}) {
 /**
  * Update an owned paste. Returns false when the paste does not exist or belongs
  * to somebody else.
+ *
+ * `fields.passwordHash` is tri-state: `undefined` keeps the stored hash,
+ * `null` removes the protection, a string replaces it.
  * @param {Db} db
  */
 export async function updatePaste(db, id, userId, fields, now = Math.floor(Date.now() / 1000)) {
@@ -121,21 +128,35 @@ export async function updatePaste(db, id, userId, fields, now = Math.floor(Date.
   if (!existing) return { ok: false, reason: 'missing' };
   if (Number(existing.user_id) !== Number(userId)) return { ok: false, reason: 'unauthorized' };
 
+  const assignments = [
+    'title = ?',
+    'content = ?',
+    'language = ?',
+    'font = ?',
+    'font_size = ?',
+    'size = ?',
+    'updated_at = ?',
+    'expires_at = ?',
+  ];
+  const params = [
+    fields.title,
+    fields.content,
+    fields.language,
+    fields.font,
+    fields.fontSize,
+    byteLength(fields.content),
+    now,
+    fields.expiresAt ?? null,
+  ];
+  if (fields.passwordHash !== undefined) {
+    assignments.push('password_hash = ?');
+    params.push(fields.passwordHash);
+  }
+  params.push(id, userId);
+
   await db.run(
-    `UPDATE pastes SET title = ?, content = ?, language = ?, font = ?, font_size = ?, size = ?,
-            updated_at = ?, expires_at = ? WHERE id = ? AND user_id = ?`,
-    [
-      fields.title,
-      fields.content,
-      fields.language,
-      fields.font,
-      fields.fontSize,
-      byteLength(fields.content),
-      now,
-      fields.expiresAt ?? null,
-      id,
-      userId,
-    ],
+    `UPDATE pastes SET ${assignments.join(', ')} WHERE id = ? AND user_id = ?`,
+    params,
   );
   return { ok: true };
 }

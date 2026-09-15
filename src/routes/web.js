@@ -3,7 +3,14 @@
  * validation here is also enforced for the JSON API in routes/api.js.
  */
 
-import { CLEANUP_BATCH, COOKIE, EXPIRATIONS, LIMITS } from '../config.js';
+import {
+  CLEANUP_BATCH,
+  COOKIE,
+  EXPIRATIONS,
+  LIMITS,
+  UNLOCK_MAX_TOKENS,
+  UNLOCK_TTL_SECONDS,
+} from '../config.js';
 import {
   authenticate,
   clearSessionCookie,
@@ -17,6 +24,15 @@ import {
   sessionCookie,
 } from '../lib/auth.js';
 import { HttpError, headers, htmlResponse, parseForm, readBody, redirect, safeRedirectTarget, svgResponse, textResponse } from '../lib/http.js';
+import { appSecret, canReadPaste, isPasteOwner } from '../lib/access.js';
+import {
+  hashPassphrase,
+  issueUnlockToken,
+  rememberUnlock,
+  unlockBucketKey,
+  unlockCookieString,
+  verifyPassphrase,
+} from '../lib/unlock.js';
 import { addLineAnchors, renderCode } from '../lib/highlight.js';
 import { faviconSvg, logoSvg, markSvg } from '../assets/mark.js';
 import {
@@ -28,6 +44,7 @@ import {
   normalizeLanguage,
   safeFilename,
   validateContent,
+  validatePassphrase,
   validateTitle,
 } from '../lib/validate.js';
 import {
@@ -44,6 +61,7 @@ import { consume } from '../lib/ratelimit.js';
 import { RATE_LIMITS } from '../config.js';
 import { editorPage } from '../views/editor.js';
 import { pastePage } from '../views/paste.js';
+import { unlockPage } from '../views/unlock.js';
 import { loginPage, registerPage } from '../views/auth.js';
 import { myPastesPage } from '../views/mypastes.js';
 import { docsPage } from '../views/docs.js';
@@ -58,8 +76,47 @@ function pageCtx(ctx) {
   return { theme: ctx.theme, user: ctx.user, path: ctx.url.pathname };
 }
 
-/** Read + validate a paste form (create and edit share the rules). */
-function readPasteInput(form, user) {
+/**
+ * Optional passphrase field. Three intents share one input:
+ *   create + empty            -> no protection
+ *   edit + empty              -> keep the stored hash untouched
+ *   edit + "remove" checkbox  -> clear the protection
+ *   anything else             -> set (validated, hashed later)
+ * @param {Record<string, string>} form
+ * @param {'create' | 'edit'} mode
+ */
+function readPassphrase(form, mode) {
+  const raw = typeof form.password === 'string' ? form.password : '';
+  if (mode === 'edit') {
+    if (form.remove_password === '1') return { state: { mode: 'clear' } };
+    if (raw === '') return { state: { mode: 'keep' } };
+  } else if (raw === '') {
+    return { state: { mode: 'none' } };
+  }
+  const check = validatePassphrase(raw);
+  if (!check.ok) return { error: check.error, state: { mode: 'keep' } };
+  return { state: { mode: 'set', value: check.value } };
+}
+
+/**
+ * Hash only after every other field validated, so a rejected paste never costs
+ * PBKDF2 work. `undefined` means "leave the stored hash alone".
+ * @param {{ mode: string, value?: string }} state
+ * @returns {Promise<string | null | undefined>}
+ */
+async function resolvePassphraseHash(state) {
+  if (state.mode === 'set') return hashPassphrase(String(state.value));
+  if (state.mode === 'clear' || state.mode === 'none') return null;
+  return undefined;
+}
+
+/**
+ * Read + validate a paste form (create and edit share the rules).
+ * @param {Record<string, string>} form
+ * @param {{ id: number } | null} user
+ * @param {'create' | 'edit'} [mode]
+ */
+function readPasteInput(form, user, mode = 'create') {
   const errors = [];
   const title = validateTitle(form.title);
   if (!title.ok) errors.push(title.error);
@@ -69,7 +126,9 @@ function readPasteInput(form, user) {
   const font = normalizeFont(form.font);
   const fontSize = normalizeFontSize(form.font_size ?? form.fontSize);
   const expiration = normalizeExpiration(form.expiration ?? form.expiresIn);
-  return { errors, title: title.ok ? title.value : String(form.title ?? '').slice(0, 200), content: content.ok ? content.value : String(form.content ?? ''), language, font, fontSize, expiration };
+  const passphrase = readPassphrase(form, mode);
+  if (passphrase.error) errors.push(passphrase.error);
+  return { errors, title: title.ok ? title.value : String(form.title ?? '').slice(0, 200), content: content.ok ? content.value : String(form.content ?? ''), language, font, fontSize, expiration, passphrase: passphrase.state };
 }
 
 // ---------------------------------------------------------------------------
@@ -81,7 +140,7 @@ export async function home(ctx) {
   const body = editorPage({
     ...pageCtx(ctx),
     mode: 'create',
-    values: { title: '', content: '', language: 'plaintext', font: 'mono', font_size: 14, expiration: '1w' },
+    values: { title: '', content: '', language: 'plaintext', font: 'mono', font_size: 14, expiration: '1w', protected: false },
     maxBytes: maxBytesFor(ctx.user),
   });
   return htmlResponse(body, 200, {}, { cache: 'no-store' });
@@ -112,6 +171,7 @@ export async function create(ctx) {
         font: input.font,
         font_size: input.fontSize,
         expiration: input.expiration.id,
+        protected: input.passphrase.mode === 'set',
       },
       errors: input.errors,
       maxBytes: maxBytesFor(ctx.user),
@@ -127,6 +187,7 @@ export async function create(ctx) {
     fontSize: input.fontSize,
     expiresAt: input.expiration.expiresAt,
     userId: ctx.user ? ctx.user.id : null,
+    passwordHash: await resolvePassphraseHash(input.passphrase),
     now: ctx.now,
   });
 
@@ -146,6 +207,12 @@ export async function view(ctx, params) {
   const paste = await getPaste(ctx.db, params.id, { content: true, now: ctx.now });
   if (!paste) throw new HttpError(404, 'This paste does not exist, or it expired and was deleted.');
 
+  // Password-protected and not (yet) unlocked: show the lock screen only.
+  // A failed look-up is never counted as a view and never consumes anything.
+  if (!(await canReadPaste(ctx, paste))) {
+    return htmlResponse(unlockPage({ ...pageCtx(ctx), paste }), 200, {}, { noindex: true });
+  }
+
   const visitor = await visitorHash(appSecret(ctx), ctx.ip, paste.id);
   const views = await recordView(ctx.db, paste.id, visitor, ctx.now).catch(() => Number(paste.views));
 
@@ -162,9 +229,49 @@ export async function view(ctx, params) {
     lineNumbers: !oversized,
     share: ctx.url.searchParams.has('created'),
     absoluteUrl: `${ctx.url.origin}/p/${paste.id}`,
-    isOwner: Boolean(ctx.user && paste.user_id !== null && Number(paste.user_id) === Number(ctx.user.id)),
+    isOwner: isPasteOwner(paste, ctx.user),
   });
   return htmlResponse(body, 200, {}, { noindex: true });
+}
+
+/**
+ * POST /p/:id/unlock — verify the passphrase and remember it in a signed,
+ * HttpOnly cookie. The passphrase travels only in the request body (form post),
+ * goes straight into PBKDF2 and is never logged, echoed or stored.
+ */
+export async function unlock(ctx, params) {
+  if (!isValidPasteId(params.id)) throw new HttpError(404);
+  const paste = await getPaste(ctx.db, params.id, { content: false, now: ctx.now });
+  if (!paste) throw new HttpError(404, 'This paste does not exist, or it expired and was deleted.');
+  if (!paste.password_hash) return redirect(`/p/${paste.id}`);
+
+  const verdict = await consume(ctx.db, unlockBucketKey(paste.id, ctx.ip), RATE_LIMITS.unlock);
+  if (!verdict.ok) {
+    throw new HttpError(
+      429,
+      `Too many unlock attempts for this paste. Try again in about ${Math.ceil(verdict.retryAfter / 60)} minute(s).`,
+      { 'Retry-After': String(verdict.retryAfter) },
+    );
+  }
+
+  const form = parseForm(await readBody(ctx.request, 4 * 1024));
+  const ok = await verifyPassphrase(form.password, paste.password_hash);
+  if (!ok) {
+    const body = unlockPage({
+      ...pageCtx(ctx),
+      paste,
+      errors: ['Wrong passphrase.'],
+      locked: true,
+    });
+    return htmlResponse(body, 401, {}, { noindex: true });
+  }
+
+  const entry = await issueUnlockToken(appSecret(ctx), paste.id, ctx.now + UNLOCK_TTL_SECONDS);
+  const value = rememberUnlock(ctx.cookies[COOKIE.unlock] || '', entry, ctx.now, UNLOCK_MAX_TOKENS);
+  return redirectWithCookie(
+    safeRedirectTarget(form.next, `/p/${paste.id}`),
+    unlockCookieString(value, { secure: ctx.secure }),
+  );
 }
 
 /** GET /p/:id/raw and /api/pastes/:id/raw */
@@ -172,6 +279,16 @@ export async function raw(ctx, params) {
   if (!isValidPasteId(params.id)) throw new HttpError(404);
   const paste = await getPaste(ctx.db, params.id, { content: true, now: ctx.now });
   if (!paste) throw new HttpError(404, 'This paste does not exist, or it expired and was deleted.');
+  // curl-friendly gate: plain text, 401, and not a single byte of content.
+  if (!(await canReadPaste(ctx, paste))) {
+    const minutes = Math.round(UNLOCK_TTL_SECONDS / 60);
+    return textResponse(
+      `This paste is password-protected.\nUnlock it at ${ctx.url.origin}/p/${paste.id} (the unlock lasts about ${minutes} minutes and needs cookies).\n`,
+      401,
+      { 'WWW-Authenticate': 'mantisbin-unlock', 'X-Robots-Tag': 'noindex, nofollow' },
+      { cache: 'no-store' },
+    );
+  }
   const filename = `${safeFilename(paste.title)}.txt`;
   const disposition = ctx.url.searchParams.get('download') === '1' ? 'attachment' : 'inline';
   return textResponse(
@@ -217,6 +334,7 @@ export async function editForm(ctx, params) {
       font: paste.font,
       font_size: paste.font_size,
       expiration: expirationForExisting(paste.expires_at, ctx.now),
+      protected: Boolean(paste.password_hash),
     },
     maxBytes: maxBytesFor(ctx.user),
   });
@@ -234,7 +352,7 @@ export async function editSave(ctx, params) {
   }
 
   const form = parseForm(await readBody(ctx.request, LIMITS.bodyMaxBytes + 64 * 1024));
-  const input = readPasteInput(form, ctx.user);
+  const input = readPasteInput(form, ctx.user, 'edit');
   if (input.errors.length) {
     if ((form.content ?? '').length > 100_000) {
       throw new HttpError(413, input.errors.find((e) => /limit/.test(e)) || input.errors[0]);
@@ -251,6 +369,7 @@ export async function editSave(ctx, params) {
         font: input.font,
         font_size: input.fontSize,
         expiration: input.expiration.id,
+        protected: Boolean(full?.password_hash),
       },
       errors: input.errors,
       maxBytes: maxBytesFor(ctx.user),
@@ -269,6 +388,7 @@ export async function editSave(ctx, params) {
       font: input.font,
       fontSize: input.fontSize,
       expiresAt: input.expiration.expiresAt,
+      passwordHash: await resolvePassphraseHash(input.passphrase),
     },
     ctx.now,
   );
@@ -435,6 +555,5 @@ function redirectWithCookie(location, cookieString) {
   });
 }
 
-export function appSecret(ctx) {
-  return ctx.env.APP_SECRET || 'mantisbin-dev-secret';
-}
+/** Re-exported so existing callers keep one import site for the app secret. */
+export { appSecret };

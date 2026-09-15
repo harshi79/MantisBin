@@ -632,6 +632,35 @@ kbd {
   background: var(--surface);
 }
 
+/* Checkbox row (e.g. "remove the paste password"). */
+.check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 400;
+  letter-spacing: normal;
+  text-transform: none;
+  color: var(--text-dim);
+}
+
+.check input[type='checkbox'] {
+  width: auto;
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+/* ---- unlock screen (password-protected pastes) ------------------------- */
+
+.unlock-form {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  padding: 16px;
+  margin: 16px 0;
+  max-width: 480px;
+}
+
 /* ---- alerts ------------------------------------------------------------ */
 
 .alert {

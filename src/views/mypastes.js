@@ -33,6 +33,7 @@ export function myPastesPage(options) {
                 <span>${formatBytes(paste.size)}</span>
                 <span title="${formatDateTime(paste.created_at)}">${relativeTime(paste.created_at)}</span>
                 <span>${paste.views} ${paste.views === 1 ? 'view' : 'views'}</span>
+                ${paste.password_hash ? html`<span class="badge">password-protected</span>` : ''}
                 ${
                   paste.expires_at
                     ? html`<span class="badge ${relativeTime(paste.expires_at).startsWith('in') ? '' : 'badge-warn'}">expires ${relativeTime(paste.expires_at)}</span>`
