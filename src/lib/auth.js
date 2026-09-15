@@ -1,7 +1,9 @@
 /**
  * Accounts, sessions and API keys.
  *
- *  - Passwords: PBKDF2-HMAC-SHA256, 210k iterations, per-user random salt.
+ *  - Passwords: PBKDF2-HMAC-SHA256, 100k iterations (the Cloudflare Workers
+ *    ceiling), per-user random salt. The count lives in the stored string, so
+ *    it can be tuned without invalidating existing passwords.
  *  - Sessions: opaque random tokens in an HttpOnly cookie; only their SHA-256
  *    hash is stored, so a database leak cannot be replayed as a session.
  *  - API keys: `mb_` + 32 random chars, stored as a SHA-256 hash with a short
@@ -120,11 +122,19 @@ export async function findUserById(db, id) {
  * @param {Db} db
  * @returns {Promise<User | null>}
  */
+/** Built once per isolate so a missing user costs the same work as a wrong password. */
+let dummyHashPromise = null;
+
+async function burnPasswordTime(password) {
+  if (!dummyHashPromise) dummyHashPromise = hashPassword('mantisbin-timing-equaliser-never-matches');
+  await verifyPassword(String(password || ''), await dummyHashPromise);
+}
+
 export async function authenticate(db, username, password) {
   const user = await findUserByUsername(db, username);
   if (!user) {
     // Hash a dummy password so a missing user costs the same time as a wrong one.
-    await verifyPassword(String(password || ''), 'pbkdf2-sha256$1000$AAAAAAAAAAAAAAAAAAAAAA$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA');
+    await burnPasswordTime(password);
     return null;
   }
   if (typeof password !== 'string' || password.length === 0) return null;

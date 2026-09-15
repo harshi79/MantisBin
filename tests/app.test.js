@@ -6,7 +6,15 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { LIMITS } from '../src/config.js';
-import { createApp, createApiKeyFor, form, jsonBody, pasteIdFrom, registerUser } from './helpers.js';
+import {
+  createApp,
+  createApiKeyFor,
+  form,
+  jsonBody,
+  pasteIdFrom,
+  registerUser,
+  withWorkersPbkdf2Cap,
+} from './helpers.js';
 
 // ---------------------------------------------------------------------------
 // Anonymous
@@ -228,6 +236,37 @@ test('registration validation: usernames and passwords', async () => {
   const dup = await app.request('/register', { body: form({ username: 'ALICE1', password: 'longenough1' }) });
   assert.equal(dup.status, 400);
   await app.close();
+});
+
+// Regression: production Cloudflare Workers reject PBKDF2 above 100 000
+// iterations, which turned every POST /register into a 500. Local runtimes do
+// not enforce the cap, so it has to be simulated here.
+test('registration works under the Cloudflare PBKDF2 iteration cap', async () => {
+  const app = await createApp();
+  const restore = withWorkersPbkdf2Cap(100_000);
+  try {
+    const res = await app.request('/register', {
+      body: form({ username: 'edge42', password: 'longenough1' }),
+      jar: 'edge42',
+    });
+    assert.equal(res.status, 303, 'registration must not 500 on the Workers iteration cap');
+    assert.equal((await app.request('/me', { jar: 'edge42' })).status, 200);
+
+    // A fresh login (different jar, no session cookie) still verifies.
+    const login = await app.request('/login', {
+      body: form({ username: 'edge42', password: 'longenough1' }),
+      jar: 'edge42-login',
+    });
+    assert.equal(login.status, 303);
+    const wrong = await app.request('/login', {
+      body: form({ username: 'edge42', password: 'wrongpass1' }),
+      jar: 'edge42-bad',
+    });
+    assert.equal(wrong.status, 401);
+  } finally {
+    restore();
+    await app.close();
+  }
 });
 
 test('login, logout and session behaviour', async () => {
