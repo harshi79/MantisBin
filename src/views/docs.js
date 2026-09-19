@@ -47,6 +47,7 @@ X-API-Key: mb_…</code></pre>
           <tr><td><code>title</code></td><td>string</td><td>required, 1–${LIMITS.titleMax} chars</td></tr>
           <tr><td><code>content</code></td><td>string</td><td>required, ≤ ${formatBytes(LIMITS.userMaxBytes)} with a key</td></tr>
           <tr><td><code>language</code></td><td>string</td><td>optional: a stored language id or <code>auto</code> (default when omitted is <code>plaintext</code>); manual selection wins, otherwise the filename extension (<code>app.py</code> → Python) wins over content detection, resolved once at creation</td></tr>
+          <tr><td><code>visibility</code></td><td>string</td><td>optional: <code>unlisted</code> (default, link-only) or <code>public</code> (listed on your profile)</td></tr>
           <tr><td><code>font</code> / <code>fontSize</code></td><td>string / number</td><td>optional viewer preferences</td></tr>
           <tr><td><code>expiresIn</code></td><td>string</td><td>optional: ${expirationOptions}; default <code>1w</code></td></tr>
           <tr><td><code>password</code></td><td>string</td><td>optional: ${LIMITS.passphraseMin}–${LIMITS.passphraseMax} chars; the paste is locked until it is entered</td></tr>
@@ -99,6 +100,7 @@ X-API-Key: mb_…</code></pre>
           <tr><td><code>language</code> / <code>font</code> / <code>fontSize</code></td><td>the source's viewer settings</td></tr>
           <tr><td><code>expiresIn</code></td><td>the source's remaining lifetime, rounded up to the next preset</td></tr>
           <tr><td><code>password</code></td><td><code>null</code> — passwords are never copied (they cannot be read back)</td></tr>
+          <tr><td><code>visibility</code></td><td><code>unlisted</code> — copies start unlisted unless explicitly published (signed-in actors only)</td></tr>
           <tr><td><code>burnAfter</code></td><td><code>never</code></td></tr>
         </tbody>
       </table>
@@ -121,6 +123,7 @@ curl -sS -X POST ${base}/api/pastes/a8Kx92Lm/fork   # no key: an anonymous copy<
       <div class="endpoint"><span class="method method-get">GET</span> <code>/api/pastes/mine</code> <span class="muted small">— your pastes (API key required)</span></div>
       <div class="endpoint"><span class="method">PATCH</span> <code>/api/pastes/:id</code> <span class="muted small">— update your paste (API key required)</span></div>
       <div class="endpoint"><span class="method">DELETE</span> <code>/api/pastes/:id</code> <span class="muted small">— delete your paste (API key required)</span></div>
+      <div class="endpoint"><span class="method method-get">GET</span> <code>/api/users/:username</code> <span class="muted small">— public profile metadata (public)</span></div>
       <div class="endpoint"><span class="method method-get">GET</span> <code>/api/meta</code> <span class="muted small">— languages, fonts, expirations and limits (public)</span></div>
       <div class="endpoint"><span class="method method-get">GET</span> <code>/api/health</code> <span class="muted small">— liveness probe (public)</span></div>
 
@@ -202,6 +205,26 @@ curl -sS ${base}/api/pastes/a8Kx92Lm        # 404 — it is gone</code></pre>
         with <code>400</code> rather than silently stored as "keep forever".
       </p>
 
+      <h2 id="profiles">Profiles & visibility</h2>
+      <p>
+        Every paste is <code>unlisted</code> unless its owner says otherwise: link-only, never
+        listed anywhere. Accounts can set <code>visibility: "public"</code> (editor radios, or the
+        API field on create/update/fork) to list a paste on their opt-in profile page at
+        <code>/u/:username</code> — avatar, member-since, stats and public pastes, newest first.
+        Anonymous pastes can never be public; copies start unlisted; flipping a paste back to
+        unlisted removes it from the profile immediately.
+      </p>
+      <p>
+        <code>GET /api/users/:username</code> returns the same profile as JSON (paste metadata,
+        never content), and <code>GET /u/:username/avatar.svg</code> serves the account's
+        deterministic avatar (immutable, cacheable forever). Profile pages are the only indexed
+        discovery surface; paste pages stay <code>noindex</code>. Account settings live at
+        <code>/me/settings</code>: profile link, password change (other sessions are revoked),
+        session revocation, and password-confirmed account deletion — which anonymises owned
+        pastes (links keep working, owner cleared, visibility reset to unlisted) instead of
+        deleting them.
+      </p>
+
       <h2 id="shape">Paste object</h2>
       <pre><code>{
   "id": "a8Kx92Lm",
@@ -218,6 +241,7 @@ curl -sS ${base}/api/pastes/a8Kx92Lm        # 404 — it is gone</code></pre>
   "expiresAt": "2026-09-15T10:12:00.000Z",
   "protected": false,
   "burnAfter": "never",
+  "visibility": "unlisted",
   "content": "ok\\nreally ok"
 }</code></pre>
       <p>List endpoints omit <code>content</code>. Timestamps are ISO 8601 UTC; <code>expiresAt</code> is <code>null</code> for “never”.</p>

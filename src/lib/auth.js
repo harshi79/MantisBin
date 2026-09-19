@@ -269,3 +269,80 @@ export async function enforceApiKeyLimit(db, userId, max = 3) {
   for (const key of stale) await revokeApiKey(db, userId, key.id);
   return stale;
 }
+
+// ---------------------------------------------------------------------------
+// Password changes, sessions and account deletion (profile settings)
+// ---------------------------------------------------------------------------
+
+/**
+ * @param {Db} db
+ * @returns {Promise<{ ok: boolean, error?: string }>}
+ */
+export async function changePassword(db, userId, currentPassword, newPassword) {
+  const user = await findUserById(db, userId);
+  if (!user) return { ok: false, error: 'Account not found.' };
+  const ok =
+    typeof currentPassword === 'string' && currentPassword.length > 0
+      ? await verifyPassword(currentPassword, user.password)
+      : false;
+  if (!ok) return { ok: false, error: 'The current password is not correct.' };
+  const next = validatePassword(newPassword);
+  if (!next.ok) return { ok: false, error: next.error };
+  const hash = await hashPassword(next.value);
+  await db.run('UPDATE users SET password = ? WHERE id = ?', [hash, userId]);
+  return { ok: true };
+}
+
+/**
+ * Active sessions for the settings page. Identified by rowid — an opaque,
+ * user-scoped handle — so token hashes never leave the database.
+ * @param {Db} db
+ */
+export async function listSessions(db, userId, now = Math.floor(Date.now() / 1000)) {
+  return db.all(
+    'SELECT rowid AS id, created_at, expires_at FROM sessions WHERE user_id = ? AND expires_at > ? ORDER BY created_at DESC, rowid DESC LIMIT 50',
+    [userId, now],
+  );
+}
+
+/** @param {Db} db @returns {Promise<number | null>} */
+export async function currentSessionRowId(db, token) {
+  if (!token || typeof token !== 'string' || token.length < 16) return null;
+  const tokenHash = await sha256Hex(token);
+  const row = await db.get('SELECT rowid AS id FROM sessions WHERE token_hash = ?', [tokenHash]);
+  return row ? Number(row.id) : null;
+}
+
+/** @param {Db} db */
+export async function revokeSession(db, userId, sessionId) {
+  const result = await db.run('DELETE FROM sessions WHERE rowid = ? AND user_id = ?', [Number(sessionId), userId]);
+  return result.changes > 0;
+}
+
+/** Sign out everywhere else (used after a password change). @param {Db} db */
+export async function revokeOtherSessions(db, userId, keepToken) {
+  if (!keepToken) return 0;
+  const tokenHash = await sha256Hex(keepToken);
+  const result = await db.run('DELETE FROM sessions WHERE user_id = ? AND token_hash <> ?', [userId, tokenHash]);
+  return result.changes;
+}
+
+/**
+ * Delete an account and anonymise its pastes: owned pastes keep their URLs,
+ * content, expirations and view counts, but lose their owner and drop back to
+ * unlisted (a paste without an owner has no profile to be public on).
+ * Sessions and API keys are deleted with the user.
+ * @param {Db} db
+ * @returns {Promise<{ pastes: number }>}
+ */
+export async function destroyUser(db, userId) {
+  const id = Number(userId);
+  const owned = await db.get('SELECT COUNT(*) AS n FROM pastes WHERE user_id = ?', [id]);
+  await db.batch([
+    { sql: "UPDATE pastes SET user_id = NULL, visibility = 'unlisted' WHERE user_id = ?", params: [id] },
+    { sql: 'DELETE FROM sessions WHERE user_id = ?', params: [id] },
+    { sql: 'DELETE FROM api_keys WHERE user_id = ?', params: [id] },
+    { sql: 'DELETE FROM users WHERE id = ?', params: [id] },
+  ]);
+  return { pastes: Number(owned?.n ?? 0) };
+}

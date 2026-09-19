@@ -19,6 +19,7 @@ import {
   COOKIE,
   DEFAULT_BURN_MODE,
   DEFAULT_FILENAME,
+  DEFAULT_VISIBILITY,
   EXPIRATIONS,
   FILENAME_EXTENSIONS,
   FONTS,
@@ -30,6 +31,7 @@ import {
   SITE,
   UNLOCK_MAX_TOKENS,
   UNLOCK_TTL_SECONDS,
+  VISIBILITY,
 } from '../config.js';
 import { authenticateApiKey } from '../lib/auth.js';
 import { appSecret, canReadPaste } from '../lib/access.js';
@@ -53,6 +55,7 @@ import {
   normalizeFont,
   normalizeFontSize,
   normalizeLanguageChoice,
+  resolveVisibility,
   expirationPresetFor,
   validateBurnMode,
   validateContent,
@@ -90,6 +93,8 @@ export function serializePaste(paste, origin, options = {}) {
     expiresAt: iso(paste.expires_at),
     /** True when reading the paste requires an unlocked passphrase. */
     protected: isProtected(paste),
+    /** 'unlisted' (link-only) or 'public' (listed on the owner's profile). */
+    visibility: paste.visibility ?? DEFAULT_VISIBILITY,
     /** 'never' | 'view' | 'read' — a one-time paste is deleted as it is served. */
     burnAfter: burnModeOf(paste),
   };
@@ -159,6 +164,7 @@ export async function meta(ctx) {
     defaultFilename: DEFAULT_FILENAME,
     /** Extension → language id, consulted when the language choice is `auto`. */
     filenameExtensions: FILENAME_EXTENSIONS,
+    visibilities: VISIBILITY,
     fonts: FONTS.map((f) => ({ id: f.id, label: f.label })),
     fontSizes: FONT_SIZES,
     expirations: EXPIRATIONS.map((e) => ({ id: e.id, label: e.label, seconds: e.seconds })),
@@ -209,6 +215,8 @@ export async function create(ctx) {
   }
   const languageChoice = normalizeLanguageChoice(body.language);
   const language = resolvePasteLanguage(languageChoice, title.value, content.value, content.bytes);
+  const visibility = resolveVisibility(body.visibility, true);
+  if (!visibility.ok) throw new HttpError(400, visibility.error);
   const paste = await createPaste(ctx.db, {
     title: title.value,
     content: content.value,
@@ -219,6 +227,7 @@ export async function create(ctx) {
     userId: auth.user.id,
     passwordHash,
     burnMode: burnAfter.value,
+    visibility: visibility.value,
     now: ctx.now,
   });
 
@@ -299,6 +308,10 @@ export async function fork(ctx, params) {
 
   const copyLanguageChoice = normalizeLanguageChoice(overrides.language ?? source.language);
   const copyLanguage = resolvePasteLanguage(copyLanguageChoice, title.value, content.value, content.bytes);
+  // Copies start unlisted unless the actor explicitly publishes them — and
+  // only a signed-in actor may publish at all.
+  const copyVisibility = resolveVisibility(overrides.visibility, !!auth);
+  if (!copyVisibility.ok) throw new HttpError(400, copyVisibility.error);
   const copy = await createPaste(ctx.db, {
     title: title.value,
     content: content.value,
@@ -309,6 +322,7 @@ export async function fork(ctx, params) {
     userId: auth ? auth.user.id : null,
     passwordHash,
     burnMode: burnAfter.value,
+    visibility: copyVisibility.value,
     now: ctx.now,
   });
 
@@ -449,6 +463,8 @@ export async function update(ctx, params) {
 
   const languageChoice = body.language === undefined ? existing.language : normalizeLanguageChoice(body.language);
   const language = resolvePasteLanguage(languageChoice, title.value, content.value, content.bytes);
+  const visibility = body.visibility === undefined ? { ok: true, value: existing.visibility } : resolveVisibility(body.visibility, true);
+  if (!visibility.ok) throw new HttpError(400, visibility.error);
   const result = await updatePaste(
     ctx.db,
     params.id,
@@ -462,6 +478,7 @@ export async function update(ctx, params) {
       expiresAt: expiration.expiresAt,
       passwordHash,
       burnMode: burnAfter.value,
+      visibility: visibility.value,
     },
     ctx.now,
   );

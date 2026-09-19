@@ -286,5 +286,32 @@ export const COOKIE = {
 /** A view only counts once per IP per paste within this window. */
 export const VIEW_DEDUPE_SECONDS = 6 * 3600;
 
+/**
+ * Paste visibility. `unlisted` is the historic behaviour (link-only, never
+ * listed anywhere); `public` lists the paste on the owner's opt-in profile
+ * page. Public pastes require an account — anonymous pastes are always
+ * unlisted — and flipping a paste back to unlisted unlists it immediately.
+ */
+export const VISIBILITY = [
+  { id: 'unlisted', label: 'Unlisted', hint: 'Only people with the link can read it. Never listed anywhere.' },
+  { id: 'public', label: 'Public', hint: 'Listed on your public profile. Anyone with your profile link can read it.' },
+];
+
+export const DEFAULT_VISIBILITY = 'unlisted';
+
+/** How many public pastes a profile page (web + API) shows, newest first. */
+export const PROFILE_PASTE_LIMIT = 100;
+
+/**
+ * Named themes. `auto` (no cookie) follows the operating system; the toggle
+ * cycles light → dark → ocean → auto.
+ */
+export const THEMES = [
+  { id: 'light', label: 'Light' },
+  { id: 'dark', label: 'Dark' },
+  { id: 'ocean', label: 'Ocean' },
+  { id: 'auto', label: 'Auto' },
+];
+
 /** Batch size for the scheduled cleanup job. */
 export const CLEANUP_BATCH = 500;

@@ -1,7 +1,8 @@
-# MantisBin — the site itself may be indexed; pastes are unlisted by design
+# MantisBin — the site and opt-in public profiles may be indexed; pastes are unlisted by design
 # and additionally carry X-Robots-Tag: noindex and <meta name="robots">.
 User-agent: *
 Allow: /
+Allow: /u/
 Disallow: /p/
 Disallow: /me
 Disallow: /login

@@ -1,6 +1,6 @@
 {
   "name": "mantisbin",
-  "version": "2.2.0",
+  "version": "2.3.0",
   "private": true,
   "type": "module",
   "description": "MantisBin — Stay sharp. Paste faster. A minimal, fast paste-sharing utility for plain text and code.",

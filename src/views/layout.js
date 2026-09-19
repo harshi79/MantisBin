@@ -21,7 +21,8 @@ import { html } from '../lib/html.js';
  * }} options
  */
 export function layout({ title, description, theme = 'auto', user = null, noindex = false, active = '', path = '/', body }) {
-  const nextTheme = theme === 'light' ? 'dark' : 'light';
+  const nextTheme = theme === 'light' ? 'dark' : theme === 'dark' ? 'ocean' : theme === 'ocean' ? 'auto' : 'light';
+  const nextLabel = nextTheme === 'auto' ? 'Auto' : nextTheme === 'light' ? 'Light' : nextTheme === 'dark' ? 'Dark' : 'Ocean';
   return html`<!doctype html>
 <html lang="en" data-theme="${theme}">
 <head>
@@ -51,7 +52,11 @@ ${noindex ? html`<meta name="robots" content="noindex, nofollow">` : ''}
       ${
         user
           ? html`<a href="/me" ${active === 'me' ? html`aria-current="page"` : ''}>My pastes</a>
-              <span class="nav-user" title="Signed in as ${user.username}">${user.username}</span>
+              <a href="/me/settings" ${active === 'settings' ? html`aria-current="page"` : ''}>Settings</a>
+              <a class="nav-profile" href="/u/${user.username}" title="Signed in as ${user.username} — view public profile">
+                <img class="avatar avatar-nav" src="/u/${user.username}/avatar.svg" alt="" width="22" height="22" loading="lazy">
+                <span class="nav-user">${user.username}</span>
+              </a>
               <form action="/logout" method="post">
                 <button class="btn btn-sm" type="submit">Sign out</button>
               </form>`
@@ -62,7 +67,7 @@ ${noindex ? html`<meta name="robots" content="noindex, nofollow">` : ''}
         <input type="hidden" name="theme" value="${nextTheme}">
         <input type="hidden" name="next" value="${path}">
         <button class="btn btn-sm btn-icon" type="submit" title="Switch to ${nextTheme} theme" aria-label="Switch to ${nextTheme} theme">
-          <span data-theme-label aria-hidden="true">${nextTheme === 'dark' ? 'Dark' : 'Light'}</span>
+          <span data-theme-label aria-hidden="true">${nextLabel}</span>
         </button>
       </form>
     </nav>

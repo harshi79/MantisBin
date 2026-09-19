@@ -4,7 +4,7 @@
  * through one of these functions.
  */
 
-import { AUTO_LANGUAGE, BURN_MODES, DEFAULT_BURN_MODE, DEFAULT_EXPIRATION, DEFAULT_FONT, DEFAULT_FONT_SIZE, DEFAULT_LANGUAGE, EXPIRATIONS, FONTS, FONT_SIZES, LANGUAGES, LIMITS } from '../config.js';
+import { AUTO_LANGUAGE, BURN_MODES, DEFAULT_BURN_MODE, DEFAULT_EXPIRATION, DEFAULT_FONT, DEFAULT_FONT_SIZE, DEFAULT_LANGUAGE, DEFAULT_VISIBILITY, EXPIRATIONS, FONTS, FONT_SIZES, LANGUAGES, LIMITS, VISIBILITY } from '../config.js';
 
 const encoder = new TextEncoder();
 
@@ -258,6 +258,33 @@ export function formatDateTime(epochSeconds) {
 export function downloadFilename(title) {
   const base = safeFilename(title);
   return /\.[a-z0-9]{1,10}$/.test(base) ? base : `${base}.txt`;
+}
+
+/**
+ * Paste visibility for create/update paths. `public` requires an account;
+ * anonymous pastes are always unlisted. An unknown value is a hard error:
+ * silently unlisting something the caller meant to publish would be the wrong
+ * default, and silently publishing would be worse.
+ * @param {unknown} value raw `visibility` input (`undefined`/empty = default)
+ * @param {boolean} authed whether the actor is signed in (session or API key)
+ * @returns {Result}
+ */
+export function resolveVisibility(value, authed) {
+  const id = typeof value === 'string' ? value.trim().toLowerCase() : '';
+  if (id === '') return { ok: true, value: DEFAULT_VISIBILITY };
+  if (!VISIBILITY.some((option) => option.id === id)) {
+    return { ok: false, error: `Unknown visibility. Use one of: ${VISIBILITY.map((o) => o.id).join(', ')}.` };
+  }
+  if (id === 'public' && !authed) {
+    return { ok: false, error: 'Public pastes need an account — register to publish on your profile.' };
+  }
+  return { ok: true, value: id };
+}
+
+/** Whitelist a stored visibility id (defence in depth for rows read back). */
+export function normalizeVisibility(value) {
+  const id = typeof value === 'string' ? value.trim().toLowerCase() : '';
+  return id === 'public' ? 'public' : DEFAULT_VISIBILITY;
 }
 
 /** Filename for the raw endpoint / download: keep it boring and safe. */

@@ -47,7 +47,10 @@ export const SCHEMA = [
     -- Burn after reading (2.2 §2): 'never' | 'view' | 'read', plus the flag that
     -- arbitrates the single allowed read between concurrent requests.
     burn_mode     TEXT    NOT NULL DEFAULT 'never',
-    burned        INTEGER NOT NULL DEFAULT 0
+    burned        INTEGER NOT NULL DEFAULT 0,
+    -- Visibility: 'unlisted' (link-only, the default) or 'public' (listed on
+    -- the owner's opt-in profile page). Anonymous pastes are always unlisted.
+    visibility    TEXT    NOT NULL DEFAULT 'unlisted'
   )`,
   // Listing a user's pastes, newest first.
   `CREATE INDEX IF NOT EXISTS idx_pastes_user_created ON pastes (user_id, created_at DESC)`,
@@ -96,6 +99,8 @@ const MIGRATIONS = [
   // 2.2 §2 — burn after reading.
   { table: 'pastes', column: 'burn_mode', sql: "ALTER TABLE pastes ADD COLUMN burn_mode TEXT NOT NULL DEFAULT 'never'" },
   { table: 'pastes', column: 'burned', sql: 'ALTER TABLE pastes ADD COLUMN burned INTEGER NOT NULL DEFAULT 0' },
+  // Profiles — per-paste visibility. Existing pastes stay unlisted.
+  { table: 'pastes', column: 'visibility', sql: "ALTER TABLE pastes ADD COLUMN visibility TEXT NOT NULL DEFAULT 'unlisted'" },
 ];
 
 function isDuplicateColumn(error) {
@@ -107,6 +112,16 @@ async function tableColumns(db, table) {
   const rows = await db.all(`SELECT name FROM pragma_table_info('${table}')`);
   return new Set(rows.map((row) => String(row.name)));
 }
+
+/**
+ * Indexes on migrated columns. These must run *after* MIGRATIONS: a pre-2.2
+ * table has no `visibility` column yet, so creating this index up front in
+ * SCHEMA would fail the migration it is meant to serve.
+ */
+const POST_MIGRATION_SCHEMA = [
+  // Public profile pages: one owner's public pastes, newest first.
+  `CREATE INDEX IF NOT EXISTS idx_pastes_public ON pastes (user_id, visibility, created_at DESC)`,
+];
 
 /** Idempotent — safe to run on every cold start / dev boot. */
 export async function ensureSchema(db) {
@@ -123,4 +138,5 @@ export async function ensureSchema(db) {
       if (!isDuplicateColumn(error)) throw error;
     }
   }
+  await db.batch(POST_MIGRATION_SCHEMA.map((sql) => ({ sql })));
 }

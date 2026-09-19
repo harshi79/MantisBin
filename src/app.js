@@ -10,6 +10,7 @@ import { CSP, HttpError, clientIp, headers, htmlResponse, isSecure, jsonResponse
 import { errorPage } from './views/errors.js';
 import * as web from './routes/web.js';
 import * as api from './routes/api.js';
+import * as profile from './routes/profile.js';
 
 /**
  * @typedef {object} Ctx
@@ -63,6 +64,13 @@ const ROUTE_TABLE = [
   ['GET', '/me', web.myPastes],
   ['POST', '/me/keys', web.createKey],
   ['POST', '/me/keys/revoke', web.revokeKey],
+  ['GET', '/me/settings', profile.settings],
+  ['POST', '/me/password', profile.updatePassword],
+  ['POST', '/me/sessions/revoke', profile.revoke],
+  ['POST', '/me/delete', profile.removeAccount],
+  ['GET', '/u/:username', profile.publicProfile],
+  ['GET', '/u/:username/avatar.svg', profile.avatar],
+  ['GET', '/api/users/:username', profile.apiProfile],
   ['GET', '/docs', web.docs],
   ['GET', '/favicon.svg', web.favicon],
   ['GET', '/logo.svg', web.logo],
@@ -93,7 +101,8 @@ export async function handleRequest({ request, env, db }) {
   const url = new URL(request.url);
   const now = Math.floor(Date.now() / 1000);
   const cookies = parseCookies(request.headers.get('cookie'));
-  const theme = cookies[COOKIE.theme] === 'light' ? 'light' : cookies[COOKIE.theme] === 'dark' ? 'dark' : 'auto';
+  const themeCookie = cookies[COOKIE.theme];
+  const theme = themeCookie === 'light' || themeCookie === 'dark' || themeCookie === 'ocean' ? themeCookie : 'auto';
 
   /** @type {Ctx} */
   const ctx = {

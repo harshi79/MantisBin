@@ -36,7 +36,7 @@ async function columns(db, table) {
 test('a fresh database has every column the app expects', async () => {
   const db = createNodeDb(':memory:');
   await ensureSchema(db);
-  for (const column of ['password_hash', 'burn_mode', 'burned']) {
+  for (const column of ['password_hash', 'burn_mode', 'burned', 'visibility']) {
     assert.ok((await columns(db, 'pastes')).includes(column), `pastes.${column}`);
   }
   await db.close();
@@ -50,7 +50,7 @@ test('an existing pre-2.2 database is migrated in place, idempotently', async ()
   );
 
   await ensureSchema(db);
-  for (const column of ['password_hash', 'burn_mode', 'burned']) {
+  for (const column of ['password_hash', 'burn_mode', 'burned', 'visibility']) {
     assert.ok((await columns(db, 'pastes')).includes(column), `pastes.${column} is added`);
   }
   const row = await db.get('SELECT title, content, views, password_hash, burn_mode, burned FROM pastes WHERE id = ?', ['oldRow01']);
@@ -63,7 +63,7 @@ test('an existing pre-2.2 database is migrated in place, idempotently', async ()
   // Every later cold start repeats the run: it must stay a no-op.
   await ensureSchema(db);
   await ensureSchema(db);
-  for (const column of ['password_hash', 'burn_mode', 'burned']) {
+  for (const column of ['password_hash', 'burn_mode', 'burned', 'visibility']) {
     assert.equal((await columns(db, 'pastes')).filter((name) => name === column).length, 1, `${column} is never duplicated`);
   }
 
