@@ -51,6 +51,7 @@ export function settingsPage(options) {
     : html`<div class="empty"><p>No active sessions.</p></div>`;
 
   const body = html`
+    <div class="account-settings">
     <div class="page-head">
       <div>
         <h1>Settings</h1>
@@ -63,7 +64,7 @@ export function settingsPage(options) {
     </div>
     ${alertBox(options.errors, options.notice)}
 
-    <section class="panel-card" aria-labelledby="profile-heading">
+    <section class="panel-card settings-profile" aria-labelledby="profile-heading">
       <div class="profile-head">
         <img class="avatar avatar-lg" src="/u/${account.username}/avatar.svg" alt="" width="64" height="64" loading="lazy">
         <div class="profile-id">
@@ -86,7 +87,7 @@ export function settingsPage(options) {
       <p class="muted small">Only pastes you mark <b>Public</b> appear on your profile. Everything else stays unlisted, even from people who know your username.</p>
     </section>
 
-    <section class="panel-card" aria-labelledby="password-heading">
+    <section class="panel-card settings-section" aria-labelledby="password-heading">
       <h2 id="password-heading">Change password</h2>
       <p class="muted small">You will stay signed in here; every other session is signed out.</p>
       <form action="/me/password" method="post" autocomplete="off">
@@ -104,13 +105,13 @@ export function settingsPage(options) {
       </form>
     </section>
 
-    <section class="panel-card" aria-labelledby="sessions-heading">
+    <section class="panel-card settings-section" aria-labelledby="sessions-heading">
       <h2 id="sessions-heading">Sessions</h2>
       <p class="muted small">Browsers currently signed in as ${account.username}. Sessions last 30 days and slide forward on activity.</p>
       ${sessionList}
     </section>
 
-    <section class="panel-card danger" aria-labelledby="delete-heading">
+    <section class="panel-card settings-section danger" aria-labelledby="delete-heading">
       <h2 id="delete-heading">Delete account</h2>
       <p class="muted small">
         This deletes <b>${account.username}</b>, every session and every API key immediately. Your pastes are
@@ -125,6 +126,7 @@ export function settingsPage(options) {
         <button class="btn btn-danger" type="submit" data-confirm-button>Delete my account</button>
       </form>
     </section>
+    </div>
   `;
 
   return layout({

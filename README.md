@@ -15,7 +15,7 @@ A fast, minimal paste-sharing utility for plain text and code.
 - Burn after reading: a one-time paste is deleted the moment it is first viewed (or first read, including `raw`/API)
 - Duplicate any paste you can read: a copy gets its own URL, expiration and owner, and the original is untouched
 - Auto language detection reads the filename extension first, then bounded content fingerprints, and resolves once; optional dependency-free QR sharing uses only the canonical URL
-- Dark + light themes, system fonts only, no webfont/CDN requests
+- Light, dark, ocean and system themes; system fonts only, no webfont/CDN requests
 - Public JSON API with key-gated writes
 - Built for **Cloudflare Workers + Cloudflare Assets**, backed by **Turso (libSQL/SQLite)**
 
@@ -32,11 +32,30 @@ The dev server runs the *exact same* application code as the production Worker,
 using Node 22's built-in SQLite (`.data/mantisbin.db`). No cloud account needed.
 
 ```bash
-npm test           # 98 end-to-end + unit tests (node:test)
+npm test           # end-to-end + unit tests (node:test)
 npm run typecheck  # tsc --noEmit over JSDoc-typed JS
 npm run build      # wrangler deploy --dry-run (bundles the Worker + assets)
 npm run clean-expired   # manual expiration sweep
 ```
+
+## Workspace UI
+
+The editor is the homepage, not a landing page. A compact file toolbar holds
+filename, language and display preferences; a separate settings area holds expiry,
+one-time reading, password and visibility controls. On small screens, settings
+collapse above the save action. Server validation errors leave them expanded.
+
+- **Keyboard:** Tab inserts four spaces, Shift+Tab leaves the editor, and
+  Ctrl/Command+Enter saves from anywhere in the form.
+- **Reading:** Copy and Share are the main actions. Download, Duplicate, QR and
+  owner actions live under **More actions**; Raw and Wrap stay with the code.
+- **Progressive enhancement:** forms and disclosures work without JavaScript.
+  JavaScript adds local draft recovery, a bounded line-number gutter, instant
+  themes, and copy/share feedback. No UI framework or font downloads are needed.
+
+For Arena's embedded local preview, set `DEV_PREVIEW=1` when starting the Node
+server. This permits only Arena/preview frame ancestors in development; normal
+local runs and the production Worker keep their existing anti-framing headers.
 
 ## Deploy to Cloudflare
 
