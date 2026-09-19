@@ -250,6 +250,16 @@ export function formatDateTime(epochSeconds) {
   return date.toISOString().replace('T', ' ').slice(0, 16) + ' UTC';
 }
 
+/**
+ * Download filename for the raw endpoint: the safe title, plus `.txt` only
+ * when the title does not already carry an extension (`app.py` downloads as
+ * `app.py`, `hello world` as `hello-world.txt`).
+ */
+export function downloadFilename(title) {
+  const base = safeFilename(title);
+  return /\.[a-z0-9]{1,10}$/.test(base) ? base : `${base}.txt`;
+}
+
 /** Filename for the raw endpoint / download: keep it boring and safe. */
 export function safeFilename(title) {
   const base = String(title || 'paste')

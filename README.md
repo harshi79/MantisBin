@@ -7,11 +7,12 @@ A fast, minimal paste-sharing utility for plain text and code.
 
 - No accounts required (optional accounts raise the limit and unlock edit/delete)
 - Unlisted pastes only: no feeds, no search, no discovery, `noindex` everywhere it matters
+- Filename-first editor: new pastes start as `untitled.txt`, and the extension picks the language (`app.py` → Python) unless you choose one explicitly
 - Manual syntax highlighting for 27 languages, rendered server-side (zero client JS needed to read a paste)
 - Optional password protection: a paste stays locked — title and content both hidden — until the passphrase is verified
 - Burn after reading: a one-time paste is deleted the moment it is first viewed (or first read, including `raw`/API)
 - Duplicate any paste you can read: a copy gets its own URL, expiration and owner, and the original is untouched
-- Auto language detection is bounded and resolves once; optional dependency-free QR sharing uses only the canonical URL
+- Auto language detection reads the filename extension first, then bounded content fingerprints, and resolves once; optional dependency-free QR sharing uses only the canonical URL
 - Dark + light themes, system fonts only, no webfont/CDN requests
 - Public JSON API with key-gated writes
 - Built for **Cloudflare Workers + Cloudflare Assets**, backed by **Turso (libSQL/SQLite)**
@@ -73,7 +74,7 @@ values — `npm run dev` then uses the real database.
 
 | Route | Purpose |
 | --- | --- |
-| `GET /` | The editor. Title, language, font, size, expiration, paste, save. |
+| `GET /` | The editor. Filename (starts as `untitled.txt`; the extension picks the language), language, font, size, expiration, paste, save. |
 | `POST /p` | Create a paste (form-encoded; works without JS) |
 | `GET /p/:id` | View a paste (public, unlisted, `noindex`). Shows the unlock screen when the paste is protected; consumes a burn-after-reading paste |
 | `POST /p/:id/unlock` | Verify a protected paste's passphrase, set the signed unlock cookie, redirect back to the paste |
@@ -282,7 +283,10 @@ Implementation notes:
 
 - The editor adds an `Auto detect` choice and the API accepts `language: "auto"`.
   Manual language ids always win; `auto` is an input instruction and is never
-  stored in `pastes.language`.
+  stored in `pastes.language`. Since the filename-first refresh, `auto` reads
+  the title's extension first (`app.py` → `python`, `Dockerfile` →
+  `dockerfile`), then the content fingerprints below; the create form starts as
+  `untitled.txt` with `auto` selected.
 - `src/lib/detect.js` uses bounded, dependency-free fingerprints for JSON, YAML,
   Markdown, shell, SQL, HTML/XML, CSS, diff and common programming languages.
   It parses at most a 64 KiB prefix, never executes or imports paste content, and

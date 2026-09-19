@@ -8,10 +8,24 @@
  * on the cheap plaintext renderer.
  */
 
-import { DEFAULT_LANGUAGE, LANGUAGE_DETECT_MAX_BYTES, LIMITS } from '../config.js';
+import {
+  AUTO_LANGUAGE,
+  DEFAULT_LANGUAGE,
+  FILENAME_EXACT_NAMES,
+  FILENAME_EXTENSIONS,
+  LANGUAGE_DETECT_MAX_BYTES,
+  LANGUAGES,
+  LIMITS,
+} from '../config.js';
 
 const encoder = new TextEncoder();
 const MAX_LINES = 4096;
+
+/** Stored ids, for validating the filename maps (defence in depth). */
+const KNOWN_LANGUAGES = new Set(LANGUAGES.map((lang) => lang.id));
+
+/** A plausible file extension: short, alphanumeric, no spaces or punctuation. */
+const EXTENSION_RE = /^[a-z0-9]{1,10}$/;
 
 /**
  * @param {string} value
@@ -43,6 +57,67 @@ function countLines(lines, pattern) {
   let count = 0;
   for (const line of lines) if (pattern.test(line)) count++;
   return count;
+}
+
+/**
+ * Read a stored language id from a paste title treated as a filename:
+ * `app.py` → `python`, `Dockerfile` → `dockerfile`, `.bashrc` → `bash`.
+ * Returns `null` when the title has no recognised name or extension, so the
+ * caller falls through to content detection. Pure and total: any input,
+ * including titles with spaces or multiple dots, yields an id or `null`.
+ * @param {unknown} title
+ * @returns {string | null}
+ */
+export function languageFromFilename(title) {
+  if (typeof title !== 'string') return null;
+  // Titles are single-line, but callers pass raw form input too: take the
+  // basename in case anything ever carries a path.
+  const base = title.split(/[\\/]/).pop()?.trim() || '';
+  if (!base || base.length > 260) return null;
+  const lowered = base.toLowerCase();
+
+  const exact = FILENAME_EXACT_NAMES[lowered.replace(/^\.+/, '')];
+  if (exact && KNOWN_LANGUAGES.has(exact)) return exact;
+
+  const dot = lowered.lastIndexOf('.');
+  // A leading dot (`.bashrc`) or a trailing dot (`notes.`) is not an extension.
+  if (dot <= 0 || dot === lowered.length - 1) return null;
+  const ext = lowered.slice(dot + 1);
+  if (!EXTENSION_RE.test(ext)) return null;
+  const mapped = FILENAME_EXTENSIONS[ext];
+  return mapped && KNOWN_LANGUAGES.has(mapped) ? mapped : null;
+}
+
+/**
+ * The display extension of a filename (`app.py` → `.py`), or `''` when the
+ * title has none. Used for the file badge on the paste view.
+ * @param {unknown} title
+ * @returns {string}
+ */
+export function filenameExtension(title) {
+  if (typeof title !== 'string') return '';
+  const base = title.split(/[\\/]/).pop()?.trim() || '';
+  const dot = base.lastIndexOf('.');
+  if (dot <= 0 || dot === base.length - 1) return '';
+  const ext = base.slice(dot + 1);
+  return EXTENSION_RE.test(ext.toLowerCase()) ? `.${ext.toLowerCase()}` : '';
+}
+
+/**
+ * Resolve a normalised language choice to a stored language id.
+ * Resolution order for `auto`: an explicit selection always wins; otherwise
+ * the filename extension wins over content fingerprints, and anything
+ * ambiguous or very large stays `plaintext`. This is the single call site
+ * behind the web form and every API create/update path.
+ * @param {string} choice normalised via `normalizeLanguageChoice`
+ * @param {unknown} title paste title (read as a filename)
+ * @param {unknown} content paste content
+ * @param {number} [byteCount] already-known UTF-8 size
+ * @returns {string}
+ */
+export function resolvePasteLanguage(choice, title, content, byteCount) {
+  if (choice !== AUTO_LANGUAGE) return choice;
+  return languageFromFilename(title) || detectLanguage(content, byteCount);
 }
 
 /**

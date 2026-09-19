@@ -4,10 +4,12 @@
  */
 
 import {
+  AUTO_LANGUAGE,
   BURN_MODES,
   CLEANUP_BATCH,
   COOKIE,
   DEFAULT_BURN_MODE,
+  DEFAULT_FILENAME,
   LIMITS,
   UNLOCK_MAX_TOKENS,
   UNLOCK_TTL_SECONDS,
@@ -40,13 +42,13 @@ import { canonicalPasteUrl, normalizeLineAnchor, qrSvg } from '../lib/qr.js';
 import { faviconSvg, logoSvg, markSvg } from '../assets/mark.js';
 import {
   cleanText,
+  downloadFilename,
   expirationPresetFor,
   isValidPasteId,
   normalizeExpiration,
   normalizeFont,
   normalizeFontSize,
   normalizeLanguageChoice,
-  safeFilename,
   validateBurnMode,
   validateContent,
   validatePassphrase,
@@ -63,7 +65,7 @@ import {
   visitorHash,
 } from '../lib/pastes.js';
 import { consume } from '../lib/ratelimit.js';
-import { detectLanguage } from '../lib/detect.js';
+import { resolvePasteLanguage } from '../lib/detect.js';
 import { RATE_LIMITS } from '../config.js';
 import { editorPage } from '../views/editor.js';
 import { pastePage } from '../views/paste.js';
@@ -130,7 +132,10 @@ function readPasteInput(form, user, mode = 'create') {
   const content = validateContent(form.content, maxBytesFor(user));
   if (!content.ok) errors.push(content.error);
   const languageChoice = normalizeLanguageChoice(form.language);
-  const language = languageChoice === 'auto' && content.ok ? detectLanguage(content.value, content.bytes) : languageChoice;
+  const language =
+    languageChoice === AUTO_LANGUAGE && content.ok
+      ? resolvePasteLanguage(languageChoice, title.ok ? title.value : String(form.title ?? ''), content.value, content.bytes)
+      : languageChoice;
   const font = normalizeFont(form.font);
   const fontSize = normalizeFontSize(form.font_size ?? form.fontSize);
   const expiration = normalizeExpiration(form.expiration ?? form.expiresIn);
@@ -162,9 +167,9 @@ export async function home(ctx) {
     ...pageCtx(ctx),
     mode: 'create',
     values: {
-      title: '',
+      title: DEFAULT_FILENAME,
       content: '',
-      language: 'plaintext',
+      language: AUTO_LANGUAGE,
       font: 'mono',
       font_size: 14,
       expiration: '1w',
@@ -397,7 +402,7 @@ export async function raw(ctx, params) {
       'X-Robots-Tag': 'noindex, nofollow',
     }, { cache: 'no-store' });
   }
-  const filename = `${safeFilename(paste.title)}.txt`;
+  const filename = downloadFilename(paste.title);
   const disposition = ctx.url.searchParams.get('download') === '1' ? 'attachment' : 'inline';
   return textResponse(
     paste.content,

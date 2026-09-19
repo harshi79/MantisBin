@@ -141,6 +141,49 @@
     previewFont();
   }
 
+  /* ---- filename → language hint ----------------------------------------- */
+
+  // When the language choice is Auto detect, the server reads the filename
+  // extension first (app.py → Python). Mirror that here as a live hint; the
+  // server re-resolves everything, so this is display-only. The map arrives
+  // in a data attribute to keep one source of truth in src/config.js.
+  var filenameInput = doc.querySelector('[data-filename]');
+  var languageSelect = doc.querySelector('select[name="language"][data-extensions]');
+  var langHint = doc.querySelector('[data-lang-hint]');
+  var extensionLabels = null;
+
+  function readExtensionLabels() {
+    if (extensionLabels || !languageSelect) return extensionLabels || {};
+    try {
+      extensionLabels = JSON.parse(languageSelect.getAttribute('data-extensions') || '{}');
+    } catch (e) {
+      extensionLabels = {};
+    }
+    return extensionLabels;
+  }
+
+  function updateLangHint() {
+    if (!langHint || !languageSelect) return;
+    var message = '';
+    if (languageSelect.value === 'auto' && filenameInput) {
+      var parts = filenameInput.value.split(/[\\/]/);
+      var base = parts[parts.length - 1].trim().toLowerCase();
+      var dot = base.lastIndexOf('.');
+      if (dot > 0 && dot < base.length - 1) {
+        var ext = base.slice(dot + 1);
+        var label = readExtensionLabels()[ext];
+        if (label) message = '→ ' + label + ' (from .' + ext + ')';
+      }
+    }
+    langHint.textContent = message;
+  }
+
+  if (filenameInput && languageSelect) {
+    filenameInput.addEventListener('input', updateLangHint);
+    languageSelect.addEventListener('change', updateLangHint);
+    updateLangHint();
+  }
+
   /* ---- local draft recovery --------------------------------------------- */
 
   var DRAFT_KEY = 'mantisbin:draft:v1';
@@ -205,10 +248,17 @@
     };
   }
 
+  // The create form starts pre-filled with the default filename; treat that
+  // as empty so merely visiting the homepage never stores a draft.
+  function defaultTitle() {
+    return (draftForm && draftForm.getAttribute('data-default-title')) || '';
+  }
+
   function saveDraft() {
     if (!draftForm || draftSubmitted || !editor) return;
     var values = draftValues();
-    if (!values.title && !values.content) {
+    var meaningfulTitle = values.title && values.title !== defaultTitle() ? values.title : '';
+    if (!meaningfulTitle && !values.content) {
       clearDraft(false);
       setDraftButtons(false);
       setDraftStatus('Drafts stay in this browser.');
@@ -261,7 +311,8 @@
     var discardButton = draftForm.querySelector('[data-draft-discard]');
     var clearButton = draftForm.querySelector('[data-draft-clear]');
 
-    if (existingDraft && (existingDraft.title || existingDraft.content)) {
+    var savedTitle = existingDraft && existingDraft.title !== defaultTitle() ? existingDraft.title : '';
+    if (existingDraft && (savedTitle || existingDraft.content)) {
       setDraftButtons(true);
       var when = existingDraft.savedAt ? new Date(existingDraft.savedAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : 'earlier';
       setDraftStatus('Unsaved draft found from ' + when + '.');

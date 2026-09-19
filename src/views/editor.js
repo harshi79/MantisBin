@@ -11,10 +11,21 @@
  *            slot belongs to the create form.
  */
 
-import { BURN_MODES, EXPIRATIONS, FONTS, FONT_SIZES, LANGUAGE_OPTIONS, LIMITS, SITE, UNLOCK_TTL_SECONDS } from '../config.js';
+import { BURN_MODES, DEFAULT_FILENAME, EXPIRATIONS, FILENAME_EXTENSIONS, FONTS, FONT_SIZES, LANGUAGES, LANGUAGE_OPTIONS, LIMITS, SITE, UNLOCK_TTL_SECONDS } from '../config.js';
 import { html } from '../lib/html.js';
 import { formatBytes } from '../lib/validate.js';
 import { alertBox, layout } from './layout.js';
+
+/** Extension → display label, for the client-side “→ Python (from .py)” hint. */
+function extensionHintPayload() {
+  const labels = new Map(LANGUAGES.map((lang) => [lang.id, lang.label]));
+  /** @type {Record<string, string>} */
+  const payload = {};
+  for (const [ext, id] of Object.entries(FILENAME_EXTENSIONS)) {
+    payload[ext] = labels.get(id) || id;
+  }
+  return JSON.stringify(payload);
+}
 
 /**
  * @param {{
@@ -54,9 +65,9 @@ export function editorPage(options) {
           </div>`
         : ''
     }
-    <form action="${action}" method="post" ${isEdit || isFork ? '' : html`data-remember="1" data-draft="new"`} autocomplete="off">
+    <form action="${action}" method="post" ${isEdit || isFork ? '' : html`data-remember="1" data-draft="new" data-default-title="${DEFAULT_FILENAME}"`} autocomplete="off">
       <div class="field">
-        <label for="title">Title <span class="muted" aria-hidden="true">· required</span></label>
+        <label for="title">Filename <span class="muted" aria-hidden="true">· required</span></label>
         <input
           class="title-input"
           id="title"
@@ -67,13 +78,15 @@ export function editorPage(options) {
           required
           autocomplete="off"
           spellcheck="false"
-          placeholder="config-diff, stack-trace, recipe.txt …">
+          data-filename
+          placeholder="${DEFAULT_FILENAME}">
+        <p class="muted small field-note">The extension picks the language when Auto detect is on — <span class="mono">app.py</span> becomes Python.</p>
       </div>
 
       <div class="toolbar editor-block">
         <div class="field">
-          <label for="language">Language</label>
-          <select id="language" name="language">
+          <label for="language">Language <span class="lang-hint" data-lang-hint aria-live="polite"></span></label>
+          <select id="language" name="language" data-extensions="${extensionHintPayload()}">
             ${LANGUAGE_OPTIONS.map(
               (lang) =>
                 html`<option value="${lang.id}" ${values.language === lang.id ? html`selected` : ''}>${lang.label}</option>`,
@@ -149,7 +162,7 @@ export function editorPage(options) {
         }
       </div>
 
-      <div class="submit-row">
+      <div class="submit-row submit-sticky">
         <div class="field">
           <label for="expiration">Expires</label>
           <select id="expiration" name="expiration">

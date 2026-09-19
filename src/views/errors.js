@@ -25,11 +25,14 @@ const MESSAGES = {
  */
 export function errorPage(options) {
   const status = Number(options.status) || 500;
-  const [title, fallback] = MESSAGES[status] || MESSAGES[500];
+  const isGone = status === 404;
+  const [title, fallback] = isGone
+    ? ['Paste Not Found', 'This paste does not exist, or it expired and was deleted. Check the URL — paste links are exact — or start a new paste below.']
+    : MESSAGES[status] || MESSAGES[500];
   const body = html`
-    <div class="error-page">
+    <div class="error-page ${isGone ? 'error-gone' : ''}">
       <div class="hero-mark">${inlineMark({ size: 44, title: 'MantisBin' })}</div>
-      <div class="code">ERROR ${status}</div>
+      ${isGone ? html`<div class="gone-numeral" aria-hidden="true">404</div>` : html`<div class="code">ERROR ${status}</div>`}
       <h1>${title}</h1>
       <p>${options.message || fallback}</p>
       <a class="btn btn-primary" href="/">New paste</a>

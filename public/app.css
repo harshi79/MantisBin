@@ -1296,6 +1296,103 @@ table.spec td code {
   }
 }
 
+/* ---- filename-first editor (PasteX-style refresh) ----------------------- */
+
+::selection {
+  background: var(--accent-soft);
+}
+
+/* The filename field reads as code, like a tab in an editor. */
+.title-input {
+  font-family: var(--code-font);
+  font-size: 15px;
+  font-weight: 500;
+}
+
+.field-note {
+  margin: 2px 0 0;
+}
+
+/* Live “→ Python (from .py)” hint next to the Language label. Empty (and
+   invisible) without JavaScript or when a language is chosen explicitly. */
+.lang-hint {
+  color: var(--accent);
+  font-weight: 600;
+  font-size: 12px;
+  text-transform: none;
+  letter-spacing: normal;
+}
+
+/* The save row pins to the viewport bottom while the editor scrolls, so
+   Expires / After reading / Save paste are always one click away. */
+.submit-sticky {
+  position: sticky;
+  bottom: 0;
+  z-index: 5;
+  padding: 12px 2px 14px;
+  background: var(--bg);
+  border-top: 1px solid var(--border);
+}
+
+/* ---- paste view: file header ------------------------------------------ */
+
+.file-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  flex: 1 1 320px;
+}
+
+.file-title h1 {
+  min-width: 0;
+}
+
+.file-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 0 4px var(--accent-soft);
+  flex: none;
+}
+
+.ext-chip {
+  font-size: 12px;
+  color: var(--accent);
+  background: var(--accent-soft);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 1px 9px;
+  flex: none;
+}
+
+.code-bar .file-name {
+  font-size: 12.5px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 44%;
+  min-width: 0;
+}
+
+.code-wrap {
+  box-shadow: 0 14px 34px -20px rgba(0, 0, 0, 0.65);
+}
+
+/* ---- friendly “paste not found” --------------------------------------- */
+
+.error-gone .gone-numeral {
+  font-family: var(--code-font);
+  font-size: 76px;
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: -0.05em;
+  margin: 6px 0 2px;
+  text-shadow: 0 0 34px var(--accent-soft);
+}
+
 /* ---- print (paste pages) ---------------------------------------------- */
 
 @media print {
