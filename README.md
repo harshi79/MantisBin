@@ -6,12 +6,15 @@ A fast, minimal paste-sharing utility for plain text and code.
 **PASTE → SAVE → SHARE → COPY** — nothing else.
 
 - No accounts required (optional accounts raise the limit and unlock edit/delete)
+- Optional public profiles: accounts can publish pastes to an opt-in `/u/name` page with a generated avatar; everything else stays unlisted
+- Account settings: change password, manage sessions, delete account (pastes are kept but anonymised)
 - Unlisted pastes only: no feeds, no search, no discovery, `noindex` everywhere it matters
+- Filename-first editor: new pastes start as `untitled.txt`, and the extension picks the language (`app.py` → Python) unless you choose one explicitly
 - Manual syntax highlighting for 27 languages, rendered server-side (zero client JS needed to read a paste)
 - Optional password protection: a paste stays locked — title and content both hidden — until the passphrase is verified
 - Burn after reading: a one-time paste is deleted the moment it is first viewed (or first read, including `raw`/API)
 - Duplicate any paste you can read: a copy gets its own URL, expiration and owner, and the original is untouched
-- Auto language detection is bounded and resolves once; optional dependency-free QR sharing uses only the canonical URL
+- Auto language detection reads the filename extension first, then bounded content fingerprints, and resolves once; optional dependency-free QR sharing uses only the canonical URL
 - Dark + light themes, system fonts only, no webfont/CDN requests
 - Public JSON API with key-gated writes
 - Built for **Cloudflare Workers + Cloudflare Assets**, backed by **Turso (libSQL/SQLite)**
@@ -73,7 +76,7 @@ values — `npm run dev` then uses the real database.
 
 | Route | Purpose |
 | --- | --- |
-| `GET /` | The editor. Title, language, font, size, expiration, paste, save. |
+| `GET /` | The editor. Filename (starts as `untitled.txt`; the extension picks the language), language, font, size, expiration, paste, save. |
 | `POST /p` | Create a paste (form-encoded; works without JS) |
 | `GET /p/:id` | View a paste (public, unlisted, `noindex`). Shows the unlock screen when the paste is protected; consumes a burn-after-reading paste |
 | `POST /p/:id/unlock` | Verify a protected paste's passphrase, set the signed unlock cookie, redirect back to the paste |
@@ -85,6 +88,13 @@ values — `npm run dev` then uses the real database.
 | `POST /p/:id/delete` | Delete **your own** paste |
 | `GET/POST /login`, `GET/POST /register`, `POST /logout` | Accounts (username + password only) |
 | `GET /me` | My pastes + API keys |
+| `GET /me/settings` | Account settings: profile link, password, sessions, delete |
+| `POST /me/password` | Change password (revokes other sessions) |
+| `POST /me/sessions/revoke` | Revoke one session |
+| `POST /me/delete` | Delete account, anonymise owned pastes |
+| `GET /u/:username` | Public profile: avatar, stats, public pastes (indexable, opt-in) |
+| `GET /u/:username/avatar.svg` | Deterministic avatar image (immutable) |
+| `GET /api/users/:username` | Profile metadata as JSON (public) |
 | `GET /docs` | API documentation |
 | `GET /api/health`, `GET /api/meta` | Liveness + vocabularies/limits (public) |
 | `POST /api/pastes` | Create via API (**API key required**) |
@@ -150,6 +160,7 @@ consumption. The creator picks one of three modes (`after reading` on the editor
 | --- | --- | --- |
 | Max paste size | 5 MB | 10 MB |
 | Edit / delete | via expiration only | yes, own pastes |
+| Public profile | — | yes, per paste (opt-in) |
 | Create rate limit | 60/hour per IP | 60/hour per account (web), 300/hour per key (API) |
 
 - Paste IDs: 8 random base62 characters (`/p/a8Kx92Lm`) — no sequential ids, no custom slugs.
@@ -282,7 +293,10 @@ Implementation notes:
 
 - The editor adds an `Auto detect` choice and the API accepts `language: "auto"`.
   Manual language ids always win; `auto` is an input instruction and is never
-  stored in `pastes.language`.
+  stored in `pastes.language`. Since the filename-first refresh, `auto` reads
+  the title's extension first (`app.py` → `python`, `Dockerfile` →
+  `dockerfile`), then the content fingerprints below; the create form starts as
+  `untitled.txt` with `auto` selected.
 - `src/lib/detect.js` uses bounded, dependency-free fingerprints for JSON, YAML,
   Markdown, shell, SQL, HTML/XML, CSS, diff and common programming languages.
   It parses at most a 64 KiB prefix, never executes or imports paste content, and
@@ -335,8 +349,8 @@ src/
     turso.js         libSQL adapter (Workers) — the only runtime dependency (@libsql/client)
     node-sqlite.js   Node built-in SQLite adapter (dev + tests), same SQL
   lib/               crypto, auth/sessions/keys, pastes, access (read authorisation),
-                     unlock (passphrase + signed unlock cookie), ratelimit, detect, qr, highlighter, html, http, maintenance
-  routes/            web.js (HTML forms) + api.js (JSON)
+                     unlock (passphrase + signed unlock cookie), ratelimit, detect, qr, avatar, highlighter, html, http, maintenance
+  routes/            web.js (HTML forms) + api.js (JSON) + profile.js (profiles/settings)
   views/             server-rendered pages (escaping-by-construction tagged templates)
   assets/mark.js     the mantis mark: one geometry, reused as inline SVG, favicon, logo
 public/              app.css, app.js (progressive enhancement only), robots.txt
@@ -387,6 +401,8 @@ Design rules the codebase follows:
   canonical `/p/:id` URL plus an optional validated `#line-N` fragment; it never
   receives content, title or passphrase. Locked QR pages hide the title/content,
   and the encoded link still opens the normal password gate.
+- Public profiles are strictly opt-in: only pastes their owner marks `public` appear on `/u/:username` (and in `GET /api/users/:username`), and flipping a paste back to unlisted removes it immediately. Anonymous pastes can never be public. Profile pages are the only indexed discovery surface; paste pages stay `noindex` and `robots.txt` still disallows `/p/`.
+- Account deletion is password-confirmed and anonymises rather than orphans: sessions, API keys and the user row are deleted, while owned pastes keep working with the owner cleared and visibility reset to unlisted. Changing a password revokes every other session.
 - Passwords: PBKDF2-HMAC-SHA256, 100 000 iterations (the Cloudflare Workers ceiling —
   `deriveBits` throws `NotSupportedError` above it), per-user salt; constant-time compares.
   The iteration count is stored inside every hash, so it can be tuned without locking anyone out.

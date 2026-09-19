@@ -11,10 +11,21 @@
  *            slot belongs to the create form.
  */
 
-import { BURN_MODES, EXPIRATIONS, FONTS, FONT_SIZES, LANGUAGE_OPTIONS, LIMITS, SITE, UNLOCK_TTL_SECONDS } from '../config.js';
+import { BURN_MODES, DEFAULT_FILENAME, DEFAULT_VISIBILITY, EXPIRATIONS, FILENAME_EXTENSIONS, FONTS, FONT_SIZES, LANGUAGES, LANGUAGE_OPTIONS, LIMITS, SITE, UNLOCK_TTL_SECONDS, VISIBILITY } from '../config.js';
 import { html } from '../lib/html.js';
 import { formatBytes } from '../lib/validate.js';
 import { alertBox, layout } from './layout.js';
+
+/** Extension → display label, for the client-side “→ Python (from .py)” hint. */
+function extensionHintPayload() {
+  const labels = new Map(LANGUAGES.map((lang) => [lang.id, lang.label]));
+  /** @type {Record<string, string>} */
+  const payload = {};
+  for (const [ext, id] of Object.entries(FILENAME_EXTENSIONS)) {
+    payload[ext] = labels.get(id) || id;
+  }
+  return JSON.stringify(payload);
+}
 
 /**
  * @param {{
@@ -22,7 +33,7 @@ import { alertBox, layout } from './layout.js';
  *   mode: 'create' | 'edit' | 'fork',
  *   pasteId?: string,
  *   values: { title: string, content: string, language: string, font: string, font_size: number, expiration: string,
- *             burn_after?: string, protected?: boolean },
+ *             burn_after?: string, protected?: boolean, visibility?: string },
  *   errors?: string[], okMessage?: string,
  *   maxBytes: number,
  * }} options
@@ -39,7 +50,31 @@ export function editorPage(options) {
       ? 'Edit anything you like — saving creates a new paste, the original is untouched.'
       : SITE.tagline;
 
+  const showHero = !isEdit && !isFork && !options.user;
+  const visibility = options.values.visibility || DEFAULT_VISIBILITY;
   const body = html`
+    ${showHero
+      ? html`<section class="hero" aria-label="About MantisBin">
+          <div class="hero-copy">
+            <p class="hero-kicker">${SITE.tagline}</p>
+            <p class="hero-title">Paste. Save. Share. Copy.</p>
+            <p class="hero-sub">Unlisted by default. Passwords, burn-after-reading and opt-in public
+              profiles when you need them — no ads, no tracking, no noise.</p>
+            <div class="hero-cta">
+              <a class="btn btn-primary" href="#title">New paste</a>
+              <a class="btn" href="/register">Create account</a>
+              <a class="btn btn-icon" href="/docs">API docs</a>
+            </div>
+          </div>
+          <ul class="hero-chips">
+            <li>Unlisted by default</li>
+            <li>Passwords</li>
+            <li>Burn after reading</li>
+            <li>Public profiles</li>
+            <li>JSON API</li>
+          </ul>
+        </section>`
+      : ''}
     <div class="home-head">
       <h1>${heading}</h1>
       <span class="tagline">${tagline}</span>
@@ -54,9 +89,9 @@ export function editorPage(options) {
           </div>`
         : ''
     }
-    <form action="${action}" method="post" ${isEdit || isFork ? '' : html`data-remember="1" data-draft="new"`} autocomplete="off">
+    <form action="${action}" method="post" ${isEdit || isFork ? '' : html`data-remember="1" data-draft="new" data-default-title="${DEFAULT_FILENAME}"`} autocomplete="off">
       <div class="field">
-        <label for="title">Title <span class="muted" aria-hidden="true">· required</span></label>
+        <label for="title">Filename <span class="muted" aria-hidden="true">· required</span></label>
         <input
           class="title-input"
           id="title"
@@ -67,13 +102,15 @@ export function editorPage(options) {
           required
           autocomplete="off"
           spellcheck="false"
-          placeholder="config-diff, stack-trace, recipe.txt …">
+          data-filename
+          placeholder="${DEFAULT_FILENAME}">
+        <p class="muted small field-note">The extension picks the language when Auto detect is on — <span class="mono">app.py</span> becomes Python.</p>
       </div>
 
       <div class="toolbar editor-block">
         <div class="field">
-          <label for="language">Language</label>
-          <select id="language" name="language">
+          <label for="language">Language <span class="lang-hint" data-lang-hint aria-live="polite"></span></label>
+          <select id="language" name="language" data-extensions="${extensionHintPayload()}">
             ${LANGUAGE_OPTIONS.map(
               (lang) =>
                 html`<option value="${lang.id}" ${values.language === lang.id ? html`selected` : ''}>${lang.label}</option>`,
@@ -121,6 +158,21 @@ export function editorPage(options) {
         </div>
       </div>
 
+      ${options.user
+        ? html`<fieldset class="field editor-block visibility-field">
+            <legend class="legend">Visibility</legend>
+            <div class="radio-row">
+              ${VISIBILITY.map(
+                (option) => html`<label class="radio">
+                  <input type="radio" name="visibility" value="${option.id}" ${visibility === option.id ? html`checked` : ''}>
+                  <span><b>${option.label}</b><span class="muted small">${option.hint}</span></span>
+                </label>`,
+              )}
+            </div>
+          </fieldset>`
+        : !isEdit && !isFork
+          ? html`<p class="muted small editor-block">Signed-in bonus: <a href="/register">create an account</a> to publish pastes on your public profile.</p>`
+          : ''}
       <div class="field editor-block">
         <label for="password">Password <span class="muted">· optional, hides the paste until it is entered</span></label>
         <input
@@ -149,7 +201,7 @@ export function editorPage(options) {
         }
       </div>
 
-      <div class="submit-row">
+      <div class="submit-row submit-sticky">
         <div class="field">
           <label for="expiration">Expires</label>
           <select id="expiration" name="expiration">

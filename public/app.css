@@ -1296,6 +1296,103 @@ table.spec td code {
   }
 }
 
+/* ---- filename-first editor (PasteX-style refresh) ----------------------- */
+
+::selection {
+  background: var(--accent-soft);
+}
+
+/* The filename field reads as code, like a tab in an editor. */
+.title-input {
+  font-family: var(--code-font);
+  font-size: 15px;
+  font-weight: 500;
+}
+
+.field-note {
+  margin: 2px 0 0;
+}
+
+/* Live “→ Python (from .py)” hint next to the Language label. Empty (and
+   invisible) without JavaScript or when a language is chosen explicitly. */
+.lang-hint {
+  color: var(--accent);
+  font-weight: 600;
+  font-size: 12px;
+  text-transform: none;
+  letter-spacing: normal;
+}
+
+/* The save row pins to the viewport bottom while the editor scrolls, so
+   Expires / After reading / Save paste are always one click away. */
+.submit-sticky {
+  position: sticky;
+  bottom: 0;
+  z-index: 5;
+  padding: 12px 2px 14px;
+  background: var(--bg);
+  border-top: 1px solid var(--border);
+}
+
+/* ---- paste view: file header ------------------------------------------ */
+
+.file-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  flex: 1 1 320px;
+}
+
+.file-title h1 {
+  min-width: 0;
+}
+
+.file-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 0 4px var(--accent-soft);
+  flex: none;
+}
+
+.ext-chip {
+  font-size: 12px;
+  color: var(--accent);
+  background: var(--accent-soft);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 1px 9px;
+  flex: none;
+}
+
+.code-bar .file-name {
+  font-size: 12.5px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 44%;
+  min-width: 0;
+}
+
+.code-wrap {
+  box-shadow: 0 14px 34px -20px rgba(0, 0, 0, 0.65);
+}
+
+/* ---- friendly “paste not found” --------------------------------------- */
+
+.error-gone .gone-numeral {
+  font-family: var(--code-font);
+  font-size: 76px;
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: -0.05em;
+  margin: 6px 0 2px;
+  text-shadow: 0 0 34px var(--accent-soft);
+}
+
 /* ---- print (paste pages) ---------------------------------------------- */
 
 @media print {
@@ -1316,4 +1413,362 @@ table.spec td code {
     max-height: none;
     overflow: visible;
   }
+}
+
+/* ---------------------------------------------------------------------------
+   Profiles + full UI refresh
+   Ocean theme, landing hero, avatars, settings/profile cards, visibility
+   radios, sticky topbar and component polish.
+--------------------------------------------------------------------------- */
+
+/* ---- Ocean theme (dark blue) -------------------------------------------- */
+
+:root[data-theme='ocean'] {
+  color-scheme: dark;
+
+  --bg: #090f16;
+  --bg-alt: #0c1420;
+  --surface: #101927;
+  --surface-2: #152032;
+  --border: #1e2c3f;
+  --border-strong: #31445e;
+  --text: #e6edf5;
+  --text-dim: #b8c4d4;
+  --muted: #7e8ea3;
+  --accent: #6fc3e8;
+  --accent-strong: #8fd3f0;
+  --accent-text: #08131c;
+  --accent-soft: rgba(111, 195, 232, 0.13);
+  --danger: #e8938a;
+  --danger-soft: rgba(232, 147, 138, 0.13);
+  --focus: #6fc3e8;
+
+  --t-com: #64748c;
+  --t-kw: #82c8ef;
+  --t-str: #e0b589;
+  --t-num: #9db8d6;
+  --t-lit: #cfa8c4;
+  --t-fn: #e8eef5;
+  --t-typ: #7fd6d6;
+  --t-var: #a9c9a4;
+  --t-key: #82c8ef;
+  --t-pun: #75839a;
+  --t-tag: #82c8ef;
+  --t-attr: #e0b589;
+  --t-ins: #7fc97f;
+  --t-del: #e8938a;
+  --t-hunk: #9db8d6;
+  --t-meta: #7e8ea3;
+  --t-h: #f0f4f9;
+}
+
+/* ---- landing hero (logged-out homepage) ---------------------------------- */
+
+.hero {
+  display: flex;
+  gap: 24px;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: linear-gradient(135deg, var(--accent-soft), transparent 60%), var(--surface);
+  padding: 26px 28px;
+  margin-bottom: 20px;
+}
+
+.hero-copy {
+  flex: 1 1 340px;
+  min-width: 0;
+}
+
+.hero-kicker {
+  color: var(--accent);
+  font-weight: 650;
+  font-size: 13px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  margin: 0 0 6px;
+}
+
+.hero-title {
+  font-size: 30px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  line-height: 1.15;
+  margin: 0 0 8px;
+}
+
+.hero-sub {
+  color: var(--text-dim);
+  margin: 0 0 16px;
+  max-width: 48ch;
+}
+
+.hero-cta {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.hero-chips {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  flex: 0 1 auto;
+}
+
+.hero-chips li {
+  border: 1px solid var(--border);
+  background: var(--bg-alt);
+  border-radius: 999px;
+  padding: 5px 14px;
+  font-size: 13px;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+
+.hero-chips li::before {
+  content: '✓ ';
+  color: var(--accent);
+  font-weight: 700;
+}
+
+@media (max-width: 720px) {
+  .hero {
+    padding: 20px;
+  }
+  .hero-title {
+    font-size: 24px;
+  }
+  .hero-chips {
+    flex-direction: row;
+    flex-wrap: wrap;
+    flex-basis: 100%;
+  }
+}
+
+/* ---- topbar: sticky ------------------------------------------------------- */
+
+.topbar {
+  position: sticky;
+  top: 0;
+  z-index: 50;
+}
+
+.nav-profile {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+
+/* ---- avatars -------------------------------------------------------------- */
+
+.avatar {
+  border-radius: 22%;
+  display: block;
+  background: var(--surface-2);
+  flex: none;
+}
+
+.avatar-lg {
+  width: 64px;
+  height: 64px;
+}
+
+.avatar-xl {
+  width: 80px;
+  height: 80px;
+}
+
+.avatar-nav {
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+}
+
+/* ---- profile + settings cards -------------------------------------------- */
+
+.panel-card {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  padding: 18px;
+  margin: 0 0 18px;
+}
+
+.panel-card h2 {
+  margin-bottom: 4px;
+}
+
+.panel-card > p.muted {
+  margin: 4px 0 0;
+}
+
+.panel-card form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 14px;
+  max-width: 480px;
+}
+
+.panel-card.danger {
+  border-left: 3px solid var(--danger);
+}
+
+.profile-hero {
+  display: flex;
+  gap: 16px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.profile-hero-sm {
+  padding: 16px 18px;
+}
+
+.profile-id {
+  min-width: 0;
+  flex: 1 1 200px;
+}
+
+.profile-id h1,
+.profile-id h2 {
+  overflow-wrap: anywhere;
+}
+
+.profile-id p {
+  margin: 2px 0 0;
+}
+
+.profile-hero .actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-left: auto;
+}
+
+.stat-chips {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.stat {
+  border: 1px solid var(--border);
+  background: var(--bg-alt);
+  border-radius: 999px;
+  padding: 3px 12px;
+  font-size: 12.5px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.stat b {
+  color: var(--text);
+  font-weight: 650;
+}
+
+.profile-link {
+  margin-top: 14px;
+  flex-basis: 100%;
+}
+
+.section-title {
+  margin: 6px 0 12px;
+}
+
+.badge-ok {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+/* ---- visibility radios ---------------------------------------------------- */
+
+.visibility-field {
+  border: 0;
+  padding: 0;
+  margin: 14px 0 0;
+  min-width: 0;
+}
+
+.radio-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  margin-top: 6px;
+}
+
+@media (max-width: 640px) {
+  .radio-row {
+    grid-template-columns: 1fr;
+  }
+}
+
+.radio {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 10px 12px;
+  cursor: pointer;
+  background: var(--surface);
+  font-size: 14px;
+}
+
+.radio:hover {
+  border-color: var(--border-strong);
+}
+
+.radio input {
+  margin-top: 3px;
+  accent-color: var(--accent);
+  width: auto;
+  flex: none;
+}
+
+.radio > span {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.radio b {
+  font-weight: 600;
+}
+
+.radio:has(input:checked) {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+/* ---- component polish ----------------------------------------------------- */
+
+.btn {
+  border-radius: 8px;
+}
+
+.card-narrow {
+  margin: 4vh auto;
+}
+
+.meta > span:not(.badge) {
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  border-radius: 999px;
+  padding: 1px 10px;
+}
+
+.error-page .hero-mark {
+  font-size: 30px;
+  color: var(--accent);
+  font-weight: 700;
+  line-height: 44px;
 }

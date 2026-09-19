@@ -4,10 +4,13 @@
  */
 
 import {
+  AUTO_LANGUAGE,
   BURN_MODES,
   CLEANUP_BATCH,
   COOKIE,
   DEFAULT_BURN_MODE,
+  DEFAULT_FILENAME,
+  DEFAULT_VISIBILITY,
   LIMITS,
   UNLOCK_MAX_TOKENS,
   UNLOCK_TTL_SECONDS,
@@ -40,13 +43,14 @@ import { canonicalPasteUrl, normalizeLineAnchor, qrSvg } from '../lib/qr.js';
 import { faviconSvg, logoSvg, markSvg } from '../assets/mark.js';
 import {
   cleanText,
+  downloadFilename,
   expirationPresetFor,
   isValidPasteId,
   normalizeExpiration,
   normalizeFont,
   normalizeFontSize,
   normalizeLanguageChoice,
-  safeFilename,
+  resolveVisibility,
   validateBurnMode,
   validateContent,
   validatePassphrase,
@@ -60,10 +64,11 @@ import {
   pruneExpired,
   recordView,
   updatePaste,
+  userStats,
   visitorHash,
 } from '../lib/pastes.js';
 import { consume } from '../lib/ratelimit.js';
-import { detectLanguage } from '../lib/detect.js';
+import { resolvePasteLanguage } from '../lib/detect.js';
 import { RATE_LIMITS } from '../config.js';
 import { editorPage } from '../views/editor.js';
 import { pastePage } from '../views/paste.js';
@@ -130,7 +135,12 @@ function readPasteInput(form, user, mode = 'create') {
   const content = validateContent(form.content, maxBytesFor(user));
   if (!content.ok) errors.push(content.error);
   const languageChoice = normalizeLanguageChoice(form.language);
-  const language = languageChoice === 'auto' && content.ok ? detectLanguage(content.value, content.bytes) : languageChoice;
+  const language =
+    languageChoice === AUTO_LANGUAGE && content.ok
+      ? resolvePasteLanguage(languageChoice, title.ok ? title.value : String(form.title ?? ''), content.value, content.bytes)
+      : languageChoice;
+  const visibility = resolveVisibility(form.visibility, !!user);
+  if (!visibility.ok) errors.push(visibility.error);
   const font = normalizeFont(form.font);
   const fontSize = normalizeFontSize(form.font_size ?? form.fontSize);
   const expiration = normalizeExpiration(form.expiration ?? form.expiresIn);
@@ -149,6 +159,7 @@ function readPasteInput(form, user, mode = 'create') {
     expiration,
     passphrase: passphrase.state,
     burnMode: burnMode.ok ? burnMode.value : DEFAULT_BURN_MODE,
+    visibility: visibility.ok ? visibility.value : DEFAULT_VISIBILITY,
   };
 }
 
@@ -162,14 +173,15 @@ export async function home(ctx) {
     ...pageCtx(ctx),
     mode: 'create',
     values: {
-      title: '',
+      title: DEFAULT_FILENAME,
       content: '',
-      language: 'plaintext',
+      language: AUTO_LANGUAGE,
       font: 'mono',
       font_size: 14,
       expiration: '1w',
       burn_after: DEFAULT_BURN_MODE,
       protected: false,
+      visibility: DEFAULT_VISIBILITY,
     },
     maxBytes: maxBytesFor(ctx.user),
   });
@@ -203,6 +215,7 @@ export async function create(ctx) {
         expiration: input.expiration.id,
         burn_after: input.burnMode,
         protected: input.passphrase.mode === 'set',
+        visibility: input.visibility,
       },
       errors: input.errors,
       maxBytes: maxBytesFor(ctx.user),
@@ -220,6 +233,7 @@ export async function create(ctx) {
     userId: ctx.user ? ctx.user.id : null,
     passwordHash: await resolvePassphraseHash(input.passphrase),
     burnMode: input.burnMode,
+    visibility: input.visibility,
     now: ctx.now,
   });
 
@@ -397,7 +411,7 @@ export async function raw(ctx, params) {
       'X-Robots-Tag': 'noindex, nofollow',
     }, { cache: 'no-store' });
   }
-  const filename = `${safeFilename(paste.title)}.txt`;
+  const filename = downloadFilename(paste.title);
   const disposition = ctx.url.searchParams.get('download') === '1' ? 'attachment' : 'inline';
   return textResponse(
     paste.content,
@@ -458,6 +472,7 @@ export async function forkForm(ctx, params) {
       expiration: expirationPresetFor(paste.expires_at, ctx.now),
       burn_after: DEFAULT_BURN_MODE,
       protected: false,
+      visibility: DEFAULT_VISIBILITY,
     },
     okMessage: oneTime
       ? `This was a one-time paste (${oneTime}) and has now been consumed — the copy you save is the only copy left.`
@@ -490,6 +505,7 @@ export async function editForm(ctx, params) {
       expiration: expirationPresetFor(paste.expires_at, ctx.now),
       burn_after: burnModeOf(paste),
       protected: Boolean(paste.password_hash),
+      visibility: paste.visibility,
     },
     maxBytes: maxBytesFor(ctx.user),
   });
@@ -526,6 +542,7 @@ export async function editSave(ctx, params) {
         expiration: input.expiration.id,
         burn_after: input.burnMode,
         protected: Boolean(full?.password_hash),
+        visibility: input.visibility,
       },
       errors: input.errors,
       maxBytes: maxBytesFor(ctx.user),
@@ -546,6 +563,7 @@ export async function editSave(ctx, params) {
       expiresAt: input.expiration.expiresAt,
       passwordHash: await resolvePassphraseHash(input.passphrase),
       burnMode: input.burnMode,
+      visibility: input.visibility,
     },
     ctx.now,
   );
@@ -631,7 +649,8 @@ export async function logout(ctx) {
 /** POST /theme */
 export async function setTheme(ctx) {
   const form = parseForm(await readBody(ctx.request, 4 * 1024));
-  const theme = form.theme === 'light' ? 'light' : 'dark';
+  const requested = String(form.theme || '').toLowerCase();
+  const theme = requested === 'light' || requested === 'dark' || requested === 'ocean' ? requested : 'auto';
   return redirectWithCookie(
     safeRedirectTarget(form.next, '/'),
     `${COOKIE.theme}=${theme}; Path=/; Max-Age=31536000; SameSite=Lax${ctx.secure ? '; Secure' : ''}`,
@@ -645,14 +664,16 @@ export async function setTheme(ctx) {
 /** GET /me */
 export async function myPastes(ctx) {
   if (!ctx.user) return redirect(`/login?next=${encodeURIComponent('/me')}`);
-  const [pastes, apiKeys] = await Promise.all([
+  const [pastes, apiKeys, stats] = await Promise.all([
     listUserPastes(ctx.db, ctx.user.id, 200, ctx.now),
     listApiKeys(ctx.db, ctx.user.id),
+    userStats(ctx.db, ctx.user.id, ctx.now),
   ]);
   const body = myPastesPage({
     ...pageCtx(ctx),
     pastes,
     apiKeys,
+    stats,
     newKey: null,
     notice: ctx.url.searchParams.get('deleted') ? 'Paste deleted.' : null,
   });
@@ -667,7 +688,8 @@ export async function createKey(ctx) {
   await enforceApiKeyLimit(ctx.db, ctx.user.id);
   const apiKeys = await listApiKeys(ctx.db, ctx.user.id);
   const pastes = await listUserPastes(ctx.db, ctx.user.id, 200, ctx.now);
-  const body = myPastesPage({ ...pageCtx(ctx), pastes, apiKeys, newKey: created.plain });
+  const stats = await userStats(ctx.db, ctx.user.id, ctx.now);
+  const body = myPastesPage({ ...pageCtx(ctx), pastes, apiKeys, stats, newKey: created.plain });
   return htmlResponse(body, 201, {}, { noindex: true });
 }
 

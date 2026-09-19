@@ -18,7 +18,10 @@ import {
   BURN_MODES,
   COOKIE,
   DEFAULT_BURN_MODE,
+  DEFAULT_FILENAME,
+  DEFAULT_VISIBILITY,
   EXPIRATIONS,
+  FILENAME_EXTENSIONS,
   FONTS,
   FONT_SIZES,
   LANGUAGES,
@@ -28,11 +31,12 @@ import {
   SITE,
   UNLOCK_MAX_TOKENS,
   UNLOCK_TTL_SECONDS,
+  VISIBILITY,
 } from '../config.js';
 import { authenticateApiKey } from '../lib/auth.js';
 import { appSecret, canReadPaste } from '../lib/access.js';
 import { burnModeOf, claimBurnForRead } from '../lib/burn.js';
-import { detectLanguage } from '../lib/detect.js';
+import { resolvePasteLanguage } from '../lib/detect.js';
 import { HttpError, jsonResponse, parseJson, readBody, textResponse } from '../lib/http.js';
 import { consume } from '../lib/ratelimit.js';
 import {
@@ -45,13 +49,14 @@ import {
   verifyPassphrase,
 } from '../lib/unlock.js';
 import {
+  downloadFilename,
   isValidPasteId,
   normalizeExpiration,
   normalizeFont,
   normalizeFontSize,
   normalizeLanguageChoice,
+  resolveVisibility,
   expirationPresetFor,
-  safeFilename,
   validateBurnMode,
   validateContent,
   validatePassphrase,
@@ -88,6 +93,8 @@ export function serializePaste(paste, origin, options = {}) {
     expiresAt: iso(paste.expires_at),
     /** True when reading the paste requires an unlocked passphrase. */
     protected: isProtected(paste),
+    /** 'unlisted' (link-only) or 'public' (listed on the owner's profile). */
+    visibility: paste.visibility ?? DEFAULT_VISIBILITY,
     /** 'never' | 'view' | 'read' — a one-time paste is deleted as it is served. */
     burnAfter: burnModeOf(paste),
   };
@@ -154,6 +161,10 @@ export async function meta(ctx) {
     tagline: SITE.tagline,
     languages: LANGUAGES,
     languageChoices: LANGUAGE_OPTIONS,
+    defaultFilename: DEFAULT_FILENAME,
+    /** Extension → language id, consulted when the language choice is `auto`. */
+    filenameExtensions: FILENAME_EXTENSIONS,
+    visibilities: VISIBILITY,
     fonts: FONTS.map((f) => ({ id: f.id, label: f.label })),
     fontSizes: FONT_SIZES,
     expirations: EXPIRATIONS.map((e) => ({ id: e.id, label: e.label, seconds: e.seconds })),
@@ -203,7 +214,9 @@ export async function create(ctx) {
     passwordHash = await hashPassphrase(String(check.value));
   }
   const languageChoice = normalizeLanguageChoice(body.language);
-  const language = languageChoice === 'auto' ? detectLanguage(content.value, content.bytes) : languageChoice;
+  const language = resolvePasteLanguage(languageChoice, title.value, content.value, content.bytes);
+  const visibility = resolveVisibility(body.visibility, true);
+  if (!visibility.ok) throw new HttpError(400, visibility.error);
   const paste = await createPaste(ctx.db, {
     title: title.value,
     content: content.value,
@@ -214,6 +227,7 @@ export async function create(ctx) {
     userId: auth.user.id,
     passwordHash,
     burnMode: burnAfter.value,
+    visibility: visibility.value,
     now: ctx.now,
   });
 
@@ -293,7 +307,11 @@ export async function fork(ctx, params) {
   }
 
   const copyLanguageChoice = normalizeLanguageChoice(overrides.language ?? source.language);
-  const copyLanguage = copyLanguageChoice === 'auto' ? detectLanguage(content.value, content.bytes) : copyLanguageChoice;
+  const copyLanguage = resolvePasteLanguage(copyLanguageChoice, title.value, content.value, content.bytes);
+  // Copies start unlisted unless the actor explicitly publishes them — and
+  // only a signed-in actor may publish at all.
+  const copyVisibility = resolveVisibility(overrides.visibility, !!auth);
+  if (!copyVisibility.ok) throw new HttpError(400, copyVisibility.error);
   const copy = await createPaste(ctx.db, {
     title: title.value,
     content: content.value,
@@ -304,6 +322,7 @@ export async function fork(ctx, params) {
     userId: auth ? auth.user.id : null,
     passwordHash,
     burnMode: burnAfter.value,
+    visibility: copyVisibility.value,
     now: ctx.now,
   });
 
@@ -392,7 +411,7 @@ export async function raw(ctx, params) {
   return textResponse(
     paste.content,
     200,
-    { 'Content-Disposition': `inline; filename="${safeFilename(paste.title)}.txt"` },
+    { 'Content-Disposition': `inline; filename="${downloadFilename(paste.title)}"` },
     { cache: 'private, max-age=60', noindex: true },
   );
 }
@@ -443,7 +462,9 @@ export async function update(ctx, params) {
   }
 
   const languageChoice = body.language === undefined ? existing.language : normalizeLanguageChoice(body.language);
-  const language = languageChoice === 'auto' ? detectLanguage(content.value, content.bytes) : languageChoice;
+  const language = resolvePasteLanguage(languageChoice, title.value, content.value, content.bytes);
+  const visibility = body.visibility === undefined ? { ok: true, value: existing.visibility } : resolveVisibility(body.visibility, true);
+  if (!visibility.ok) throw new HttpError(400, visibility.error);
   const result = await updatePaste(
     ctx.db,
     params.id,
@@ -457,6 +478,7 @@ export async function update(ctx, params) {
       expiresAt: expiration.expiresAt,
       passwordHash,
       burnMode: burnAfter.value,
+      visibility: visibility.value,
     },
     ctx.now,
   );

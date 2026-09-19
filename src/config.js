@@ -136,6 +136,117 @@ export const LANGUAGE_OPTIONS = [{ id: AUTO_LANGUAGE, label: 'Auto detect' }, ..
 export const LANGUAGE_DETECT_MAX_BYTES = 64 * 1024;
 
 /**
+ * Filename-first editing (PasteX-style): the create form starts with this
+ * name, and `languageFromFilename()` in lib/detect.js reads the extension.
+ */
+export const DEFAULT_FILENAME = 'untitled.txt';
+
+/**
+ * Filename extension (lowercase, without the dot) → stored language id.
+ * Consulted only when the language choice is `auto`: an explicit selection
+ * always wins, and an unknown/missing extension falls through to content
+ * detection. Every value must be a valid `LANGUAGES` id.
+ */
+export const FILENAME_EXTENSIONS = {
+  txt: 'plaintext',
+  text: 'plaintext',
+  log: 'plaintext',
+  md: 'markdown',
+  markdown: 'markdown',
+  mdown: 'markdown',
+  mkdown: 'markdown',
+  json: 'json',
+  jsonc: 'json',
+  json5: 'json',
+  geojson: 'json',
+  yml: 'yaml',
+  yaml: 'yaml',
+  toml: 'ini',
+  ini: 'ini',
+  cfg: 'ini',
+  conf: 'ini',
+  env: 'ini',
+  sh: 'bash',
+  bash: 'bash',
+  zsh: 'bash',
+  fish: 'bash',
+  ksh: 'bash',
+  c: 'c',
+  h: 'c',
+  hh: 'cpp',
+  hpp: 'cpp',
+  hxx: 'cpp',
+  cpp: 'cpp',
+  cxx: 'cpp',
+  cc: 'cpp',
+  cs: 'csharp',
+  java: 'java',
+  js: 'javascript',
+  mjs: 'javascript',
+  cjs: 'javascript',
+  jsx: 'javascript',
+  ts: 'typescript',
+  mts: 'typescript',
+  cts: 'typescript',
+  tsx: 'typescript',
+  py: 'python',
+  pyw: 'python',
+  pyi: 'python',
+  rb: 'ruby',
+  php: 'php',
+  go: 'go',
+  rs: 'rust',
+  kt: 'kotlin',
+  kts: 'kotlin',
+  swift: 'swift',
+  lua: 'lua',
+  sql: 'sql',
+  html: 'html',
+  htm: 'html',
+  xhtml: 'html',
+  vue: 'html',
+  svelte: 'html',
+  astro: 'html',
+  xml: 'xml',
+  xsl: 'xml',
+  xslt: 'xml',
+  xsd: 'xml',
+  svg: 'xml',
+  plist: 'xml',
+  wsdl: 'xml',
+  rss: 'xml',
+  atom: 'xml',
+  css: 'css',
+  scss: 'css',
+  less: 'css',
+  diff: 'diff',
+  patch: 'diff',
+  rej: 'diff',
+  mk: 'makefile',
+  mak: 'makefile',
+  mkfile: 'makefile',
+  dockerfile: 'dockerfile',
+};
+
+/**
+ * Exact basenames (lowercase, leading dots ignored) → stored language id.
+ * For the extension-less files developers actually paste: `Dockerfile`,
+ * `Makefile`, `Gemfile`, dotfiles like `.bashrc`. Checked before the
+ * extension map above.
+ */
+export const FILENAME_EXACT_NAMES = {
+  dockerfile: 'dockerfile',
+  containerfile: 'dockerfile',
+  makefile: 'makefile',
+  gnumakefile: 'makefile',
+  gemfile: 'ruby',
+  rakefile: 'ruby',
+  bashrc: 'bash',
+  zshrc: 'bash',
+  shrc: 'bash',
+};
+
+/**
  * Rate limits — deliberately generous, they exist only to stop obvious abuse.
  * `limit` requests per `window` seconds, per bucket (IP or API key).
  */
@@ -174,6 +285,33 @@ export const COOKIE = {
 
 /** A view only counts once per IP per paste within this window. */
 export const VIEW_DEDUPE_SECONDS = 6 * 3600;
+
+/**
+ * Paste visibility. `unlisted` is the historic behaviour (link-only, never
+ * listed anywhere); `public` lists the paste on the owner's opt-in profile
+ * page. Public pastes require an account — anonymous pastes are always
+ * unlisted — and flipping a paste back to unlisted unlists it immediately.
+ */
+export const VISIBILITY = [
+  { id: 'unlisted', label: 'Unlisted', hint: 'Only people with the link can read it. Never listed anywhere.' },
+  { id: 'public', label: 'Public', hint: 'Listed on your public profile. Anyone with your profile link can read it.' },
+];
+
+export const DEFAULT_VISIBILITY = 'unlisted';
+
+/** How many public pastes a profile page (web + API) shows, newest first. */
+export const PROFILE_PASTE_LIMIT = 100;
+
+/**
+ * Named themes. `auto` (no cookie) follows the operating system; the toggle
+ * cycles light → dark → ocean → auto.
+ */
+export const THEMES = [
+  { id: 'light', label: 'Light' },
+  { id: 'dark', label: 'Dark' },
+  { id: 'ocean', label: 'Ocean' },
+  { id: 'auto', label: 'Auto' },
+];
 
 /** Batch size for the scheduled cleanup job. */
 export const CLEANUP_BATCH = 500;

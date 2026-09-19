@@ -5,8 +5,9 @@
 
 import { LANGUAGES, SITE } from '../config.js';
 import { burnLabel } from '../lib/burn.js';
+import { filenameExtension } from '../lib/detect.js';
 import { html, raw } from '../lib/html.js';
-import { formatBytes, formatDateTime, formatNumber, relativeTime, safeFilename } from '../lib/validate.js';
+import { downloadFilename, formatBytes, formatDateTime, formatNumber, relativeTime } from '../lib/validate.js';
 import { layout } from './layout.js';
 
 function languageLabel(id) {
@@ -31,13 +32,18 @@ export function pastePage(options) {
   const lines = String(paste.content ?? '').split('\n').length;
   const expired = paste.expires_at !== null && paste.expires_at !== undefined;
 
+  const ext = filenameExtension(paste.title);
   const body = html`
     <div class="paste-head">
-      <h1>${paste.title}</h1>
+      <div class="file-title">
+        <span class="file-dot" aria-hidden="true"></span>
+        <h1>${paste.title}</h1>
+        ${ext ? html`<span class="ext-chip mono">${ext}</span>` : ''}
+      </div>
       <div class="actions">
         <button class="btn btn-sm" type="button" data-copy="#paste-content">Copy</button>
         <a class="btn btn-sm" href="/p/${paste.id}/raw">Raw</a>
-        <a class="btn btn-sm" href="/p/${paste.id}/raw?download=1" download="${safeFilename(paste.title)}.txt">Download</a>
+        <a class="btn btn-sm" href="/p/${paste.id}/raw?download=1" download="${downloadFilename(paste.title)}">Download</a>
         <a class="btn btn-sm" href="/p/${paste.id}/fork" title="Create a copy of this paste">Duplicate</a>
         <button class="btn btn-sm" type="button" data-share>Share</button>
         <a class="btn btn-sm" href="/p/${paste.id}/qr" data-qr-link title="Share this paste as a QR code">QR</a>
@@ -83,6 +89,7 @@ export function pastePage(options) {
     <div class="code-wrap">
       <div class="code-bar">
         <span class="lang">${languageLabel(paste.language)}</span>
+        <span class="file-name mono" title="${paste.title}">${paste.title}</span>
         <span class="grow"></span>
         <span class="muted small mono">/p/${paste.id}</span>
       </div>

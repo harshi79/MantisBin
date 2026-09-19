@@ -508,7 +508,7 @@ test('unknown routes 404, wrong methods 405, errors stay friendly', async () => 
   const app = await createApp();
   const missing = await app.request('/definitely-not-a-page');
   assert.equal(missing.status, 404);
-  assert.match(await missing.text(), /Not found/);
+  assert.match(await missing.text(), /Paste Not Found/);
   const wrongMethod = await app.request('/', { method: 'DELETE' });
   assert.equal(wrongMethod.status, 405);
   const apiMissing = await app.request('/api/pastes');
