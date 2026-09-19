@@ -1,11 +1,7 @@
-/**
- * Page chrome: <head>, header, footer. Every page on the site renders through
- * `layout()`, so the brand mark, navigation and theme handling live in exactly
- * one place.
- */
-
+/** Shared page chrome. No external fonts, scripts or icon requests. */
 import { SITE } from '../config.js';
 import { inlineMark } from '../assets/mark.js';
+import { icon } from '../assets/icons.js';
 import { html } from '../lib/html.js';
 
 /**
@@ -32,8 +28,8 @@ export function layout({ title, description, theme = 'auto', user = null, noinde
 <meta name="description" content="${description || SITE.description}">
 ${noindex ? html`<meta name="robots" content="noindex, nofollow">` : ''}
 <meta name="color-scheme" content="dark light">
-<meta name="theme-color" content="#0b0d0f" media="(prefers-color-scheme: dark)">
-<meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#141716" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#f7f8f6" media="(prefers-color-scheme: light)">
 <link rel="icon" type="image/svg+xml" href="/favicon.svg">
 <link rel="stylesheet" href="/app.css">
 <meta property="og:site_name" content="${SITE.name}">
@@ -44,32 +40,39 @@ ${noindex ? html`<meta name="robots" content="noindex, nofollow">` : ''}
 <header class="topbar">
   <div class="shell topbar-inner">
     <a class="brand" href="/" aria-label="MantisBin home">
-      ${inlineMark({ size: 22 })}
+      <span class="brand-symbol">${inlineMark({ size: 28 })}</span>
       <span class="brand-word">Mantis<b>Bin</b></span>
     </a>
     <nav class="nav" aria-label="Main">
-      <a href="/" ${active === 'home' ? html`aria-current="page"` : ''}>New paste</a>
-      ${
-        user
-          ? html`<a href="/me" ${active === 'me' ? html`aria-current="page"` : ''}>My pastes</a>
-              <a href="/me/settings" ${active === 'settings' ? html`aria-current="page"` : ''}>Settings</a>
-              <a class="nav-profile" href="/u/${user.username}" title="Signed in as ${user.username} — view public profile">
-                <img class="avatar avatar-nav" src="/u/${user.username}/avatar.svg" alt="" width="22" height="22" loading="lazy">
+      <div class="nav-primary">
+        <a class="nav-link" href="/" ${active === 'home' ? html`aria-current="page"` : ''}>${icon('plus')}<span>New paste</span></a>
+        ${user ? html`<a class="nav-link" href="/me" ${active === 'me' ? html`aria-current="page"` : ''}>My pastes</a>` : ''}
+        <a class="nav-link nav-docs" href="/docs" ${path === '/docs' ? html`aria-current="page"` : ''}>API docs</a>
+      </div>
+      <div class="nav-account">
+        ${user
+          ? html`<a class="nav-link nav-settings" href="/me/settings" ${active === 'settings' ? html`aria-current="page"` : ''}>Settings</a>
+              <a class="nav-profile" href="/u/${user.username}" title="View your public profile">
+                <img class="avatar avatar-nav" src="/u/${user.username}/avatar.svg" alt="" width="26" height="26" loading="lazy">
                 <span class="nav-user">${user.username}</span>
               </a>
               <form action="/logout" method="post">
-                <button class="btn btn-sm" type="submit">Sign out</button>
+                <button class="btn btn-sm btn-ghost" type="submit">Sign out</button>
               </form>`
-          : html`<a href="/login" ${active === 'login' ? html`aria-current="page"` : ''}>Sign in</a>
-              <a href="/register" ${active === 'register' ? html`aria-current="page"` : ''}>Register</a>`
-      }
-      <form data-theme-form action="/theme" method="post">
-        <input type="hidden" name="theme" value="${nextTheme}">
-        <input type="hidden" name="next" value="${path}">
-        <button class="btn btn-sm btn-icon" type="submit" title="Switch to ${nextTheme} theme" aria-label="Switch to ${nextTheme} theme">
-          <span data-theme-label aria-hidden="true">${nextLabel}</span>
-        </button>
-      </form>
+          : html`<a class="nav-link" href="/login" ${active === 'login' ? html`aria-current="page"` : ''}>Sign in</a>
+              <a class="btn btn-sm nav-register" href="/register" ${active === 'register' ? html`aria-current="page"` : ''}>Create account</a>`}
+        <form class="theme-form" data-theme-form action="/theme" method="post">
+          <input type="hidden" name="theme" value="${nextTheme}">
+          <input type="hidden" name="next" value="${path}">
+          <button class="btn btn-icon theme-toggle" type="submit" title="Switch to ${nextTheme} theme" aria-label="Switch to ${nextTheme} theme">
+            <span class="theme-symbol theme-auto">${icon('monitor')}</span>
+            <span class="theme-symbol theme-light">${icon('sun')}</span>
+            <span class="theme-symbol theme-dark">${icon('moon')}</span>
+            <span class="theme-symbol theme-ocean">${icon('waves')}</span>
+            <span class="sr-only" data-theme-label aria-hidden="true">${nextLabel}</span>
+          </button>
+        </form>
+      </div>
     </nav>
   </div>
 </header>
@@ -78,11 +81,11 @@ ${noindex ? html`<meta name="robots" content="noindex, nofollow">` : ''}
 </main>
 <footer class="footer">
   <div class="shell footer-inner">
-    <span class="footer-mark">${inlineMark({ size: 15 })}<span>${SITE.name} — ${SITE.tagline}</span></span>
-    <span aria-hidden="true">·</span>
-    <a href="/docs">API docs</a>
-    <span aria-hidden="true">·</span>
-    <span>Pastes are unlisted and never indexed.</span>
+    <span class="footer-mark"><span class="footer-name">${SITE.name}</span><span>${SITE.tagline}</span></span>
+    <div class="footer-links">
+      <span class="footer-privacy">${icon('link')} Unlisted by default</span>
+      <a href="/docs">API documentation ${icon('external')}</a>
+    </div>
   </div>
 </footer>
 <script src="/app.js" defer></script>

@@ -107,7 +107,10 @@ async function main() {
   const port = Number(env.PORT || 8787);
 
   const server = createServer(async (req, res) => {
-    const url = new URL(req.url || '/', `http://${req.headers.host || `localhost:${port}`}`);
+    // Preserve the browser-facing scheme behind a TLS-terminating preview proxy.
+    const forwardedProto = String(req.headers['x-forwarded-proto'] || '').split(',')[0].trim();
+    const scheme = forwardedProto === 'https' ? 'https' : 'http';
+    const url = new URL(req.url || '/', `${scheme}://${req.headers.host || `localhost:${port}`}`);
 
     if ((req.method === 'GET' || req.method === 'HEAD') && (await serveStatic(url.pathname, res))) {
       return;
@@ -127,6 +130,17 @@ async function main() {
       }
       const request = new Request(url.href, { method: req.method, headers, body });
       const response = await handleRequest({ request, env, db });
+
+      // Opt in only for an embedded Arena development preview. The Worker and
+      // ordinary local development retain their clickjacking protections.
+      if (env.DEV_PREVIEW === '1') {
+        response.headers.delete('X-Frame-Options');
+        const csp = response.headers.get('Content-Security-Policy');
+        if (csp) response.headers.set('Content-Security-Policy', csp.replace(
+          "frame-ancestors 'none'",
+          'frame-ancestors https://arena.ai https://*.arena.ai https://*.e2b.app',
+        ));
+      }
 
       const responseHeaders = {};
       for (const [key, value] of response.headers.entries()) responseHeaders[key] = value;

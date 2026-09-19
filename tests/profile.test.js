@@ -251,13 +251,15 @@ test('delete account keeps pastes online but anonymised and unlisted', async () 
   }
 });
 
-test('editor shows visibility radios to members and a hero to visitors', async () => {
+test('editor shows visibility radios to members and a focused workspace to visitors', async () => {
   const app = await createApp();
   try {
     const anon = await (await app.request('/')).text();
-    assert.match(anon, /Paste\. Save\. Share\. Copy\./);
+    assert.match(anon, /Your text or code\. One link to share it\./);
+    assert.match(anon, /class="workspace"/);
+    assert.doesNotMatch(anon, /hero-title|hero-chips/);
     assert.doesNotMatch(anon, /name="visibility"/);
-    assert.match(anon, /create an account/);
+    assert.match(anon, /create an account/i);
 
     await registerUser(app, 'radiu');
     const member = await (await app.request('/', { jar: 'radiu' })).text();

@@ -36,6 +36,12 @@
       if (input) input.value = nextTheme(value);
       var label = forms[i].querySelector('[data-theme-label]');
       if (label) label.textContent = THEME_LABELS[nextTheme(value)];
+      var button = forms[i].querySelector('button');
+      if (button) {
+        var description = 'Switch to ' + nextTheme(value) + ' theme';
+        button.setAttribute('aria-label', description);
+        button.title = description;
+      }
     }
   }
 
@@ -51,8 +57,32 @@
 
   /* ---- editor ------------------------------------------------------------ */
 
+  var editorForm = doc.querySelector('[data-editor-form]');
   var editor = doc.querySelector('textarea[name="content"]');
   var counter = doc.querySelector('[data-counter]');
+  var lineCount = doc.querySelector('[data-line-count]');
+  var gutter = doc.querySelector('[data-line-gutter]');
+  var gutterNumbers = doc.querySelector('[data-line-numbers]');
+  var totalLines = 1;
+
+  // Render only the visible line numbers, even for multi-megabyte pastes.
+  function renderGutter() {
+    if (!editor || !gutter || !gutterNumbers) return;
+    gutter.hidden = false;
+    var style = window.getComputedStyle(editor);
+    var height = parseFloat(style.lineHeight);
+    if (!height) return;
+    var first = Math.floor(editor.scrollTop / height);
+    var visible = Math.ceil(editor.clientHeight / height) + 1;
+    var numbers = [];
+    for (var line = first + 1; line <= Math.min(totalLines, first + visible); line++) {
+      numbers.push(line);
+    }
+    gutterNumbers.textContent = numbers.join('\n');
+    gutterNumbers.style.fontSize = style.fontSize;
+    gutterNumbers.style.lineHeight = style.lineHeight;
+    gutterNumbers.style.transform = 'translateY(-' + (editor.scrollTop % height) + 'px)';
+  }
 
   function byteLength(value) {
     if (/[^\x00-\x7F]/.test(value)) return new TextEncoder().encode(value).length;
@@ -65,6 +95,14 @@
     var limit = Number(counter.getAttribute('data-limit')) || 0;
     counter.textContent = formatBytes(bytes) + ' / ' + formatBytes(limit);
     counter.setAttribute('data-over', bytes > limit ? 'true' : 'false');
+    totalLines = 1;
+    var newline = editor.value.indexOf('\n');
+    while (newline !== -1) {
+      totalLines++;
+      newline = editor.value.indexOf('\n', newline + 1);
+    }
+    if (lineCount) lineCount.textContent = totalLines.toLocaleString() + (totalLines === 1 ? ' line' : ' lines');
+    renderGutter();
   }
 
   function formatBytes(n) {
@@ -82,9 +120,9 @@
     });
     updateCounter();
 
-    // Tab inserts spaces instead of leaving the editor.
+    // Tab indents; Shift+Tab always lets keyboard users leave the editor.
     editor.addEventListener('keydown', function (event) {
-      if (event.key === 'Tab' && !event.ctrlKey && !event.metaKey && !event.altKey) {
+      if (event.key === 'Tab' && !event.shiftKey && !event.ctrlKey && !event.metaKey && !event.altKey) {
         event.preventDefault();
         var start = editor.selectionStart;
         var end = editor.selectionEnd;
@@ -92,12 +130,45 @@
         editor.setRangeText(spaces, start, end, 'end');
         editor.dispatchEvent(new Event('input'));
       }
+    });
+    var gutterFrame = null;
+    editor.addEventListener('scroll', function () {
+      if (gutterFrame) cancelAnimationFrame(gutterFrame);
+      gutterFrame = requestAnimationFrame(renderGutter);
+    });
+    if (window.ResizeObserver) new ResizeObserver(renderGutter).observe(editor);
+    else window.addEventListener('resize', renderGutter);
+  }
+
+  if (editorForm) {
+    editorForm.addEventListener('keydown', function (event) {
       if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') {
         event.preventDefault();
-        var form = editor.closest('form');
-        if (form && form.requestSubmit) form.requestSubmit();
+        if (editorForm.requestSubmit) editorForm.requestSubmit();
       }
     });
+    var modifier = doc.querySelector('[data-shortcut-mod]');
+    if (modifier && /Mac|iPhone|iPad/.test(navigator.platform)) modifier.textContent = '⌘';
+    var burnSelect = editorForm.querySelector('[name="burn_after"]');
+    var burnHelp = doc.getElementById('burn-help');
+    function updateBurnHelp() {
+      if (burnSelect && burnHelp) burnHelp.hidden = burnSelect.value === 'never';
+    }
+    if (burnSelect) burnSelect.addEventListener('change', updateBurnHelp);
+    updateBurnHelp();
+    var settingsPanel = doc.querySelector('[data-paste-settings]');
+    var expirationSelect = editorForm.querySelector('[name="expiration"]');
+    var settingsSummary = doc.querySelector('[data-settings-summary]');
+    function updateSettingsSummary() {
+      if (settingsSummary && expirationSelect) {
+        settingsSummary.textContent = expirationSelect.options[expirationSelect.selectedIndex].text;
+      }
+    }
+    if (settingsPanel && !settingsPanel.hasAttribute('data-keep-open') && window.matchMedia('(max-width: 800px)').matches) {
+      settingsPanel.open = false;
+    }
+    if (expirationSelect) expirationSelect.addEventListener('change', updateSettingsSummary);
+    updateSettingsSummary();
   }
 
   /* ---- remembered controls on the create form --------------------------- */
@@ -132,18 +203,23 @@
       });
     });
 
-    // Live font/size preview while typing.
-    function previewFont() {
-      var font = remember.querySelector('[name="font"]');
-      var size = remember.querySelector('[name="font_size"]');
-      var target = remember.querySelector('textarea[name="content"]');
-      if (!font || !size || !target) return;
-      target.className = target.className.replace(/\bfont-\S+/g, '').replace(/\bfs-\d+/g, '');
-      target.classList.add('font-' + font.value);
-      target.classList.add('fs-' + size.value);
-    }
-    var fontSelect = remember.querySelector('[name="font"]');
-    var sizeSelect = remember.querySelector('[name="font_size"]');
+  }
+
+  // Preview controls work in create, edit and duplicate modes. Only create
+  // remembers preferences; the other modes keep the source paste's settings.
+  function previewFont() {
+    if (!editorForm || !editor) return;
+    var font = editorForm.querySelector('[name="font"]');
+    var size = editorForm.querySelector('[name="font_size"]');
+    if (!font || !size) return;
+    editor.className = editor.className.replace(/\bfont-\S+/g, '').replace(/\bfs-\d+/g, '');
+    editor.classList.add('font-' + font.value);
+    editor.classList.add('fs-' + size.value);
+    renderGutter();
+  }
+  if (editorForm) {
+    var fontSelect = editorForm.querySelector('[name="font"]');
+    var sizeSelect = editorForm.querySelector('[name="font_size"]');
     if (fontSelect) fontSelect.addEventListener('change', previewFont);
     if (sizeSelect) sizeSelect.addEventListener('change', previewFont);
     previewFont();
@@ -281,7 +357,7 @@
     try {
       localStorage.setItem(DRAFT_KEY, JSON.stringify(values));
       setDraftButtons(true);
-      setDraftStatus('Draft saved at ' + new Date(values.savedAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) + '.');
+      setDraftStatus('Draft saved locally at ' + new Date(values.savedAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) + '.');
     } catch (e) {
       setDraftStatus('Draft autosave is unavailable in this browser.');
     }
@@ -451,6 +527,8 @@
               if (error && error.name === 'AbortError') return;
               copyText(url).then(function () {
                 flash(button, 'Link copied');
+              }, function () {
+                flash(button, 'Share unavailable');
               });
             },
           );
@@ -495,15 +573,47 @@
     });
   }
 
+  // Keep the icon in place when showing feedback or toggling a label.
+  function buttonLabel(button) {
+    return button.querySelector('[data-button-label]') || button;
+  }
+
   function flash(button, message) {
-    var original = button.getAttribute('data-label') || button.textContent;
-    if (!button.getAttribute('data-label')) button.setAttribute('data-label', original);
-    button.textContent = message;
+    var label = buttonLabel(button);
+    if (!label.hasAttribute('data-label')) label.setAttribute('data-label', label.textContent);
+    label.textContent = message;
     button.setAttribute('aria-live', 'polite');
-    setTimeout(function () {
-      button.textContent = button.getAttribute('data-label');
+    clearTimeout(button._flashTimer);
+    button._flashTimer = setTimeout(function () {
+      label.textContent = label.getAttribute('data-label');
     }, 1400);
   }
+
+  // Native details remains usable without JS. Add dismissal, not custom menu
+  // roles: every action stays a normal, keyboard-focusable button or link.
+  var menus = doc.querySelectorAll('[data-action-menu]');
+  for (var m = 0; m < menus.length; m++) {
+    menus[m].addEventListener('toggle', function (event) {
+      if (!event.currentTarget.open) return;
+      for (var i = 0; i < menus.length; i++) {
+        if (menus[i] !== event.currentTarget) menus[i].open = false;
+      }
+    });
+  }
+  doc.addEventListener('click', function (event) {
+    for (var i = 0; i < menus.length; i++) {
+      if (menus[i].open && !menus[i].contains(event.target)) menus[i].open = false;
+    }
+  });
+  doc.addEventListener('keydown', function (event) {
+    if (event.key !== 'Escape') return;
+    for (var i = 0; i < menus.length; i++) {
+      if (menus[i].open) {
+        menus[i].open = false;
+        menus[i].querySelector('summary').focus();
+      }
+    }
+  });
 
   /* ---- destructive confirmations ---------------------------------------- */
 
@@ -514,13 +624,13 @@
       if (form.getAttribute('data-confirmed') === '1') return;
       event.preventDefault();
       var button = form.querySelector('[data-confirm-button]');
-      var label = button ? button.textContent : 'Delete';
+      var label = button ? buttonLabel(button).textContent : 'Delete';
       if (!form.getAttribute('data-armed')) {
         form.setAttribute('data-armed', '1');
-        if (button) button.textContent = 'Sure? Click again';
+        if (button) buttonLabel(button).textContent = 'Sure? Click again';
         setTimeout(function () {
           form.removeAttribute('data-armed');
-          if (button) button.textContent = label;
+          if (button) buttonLabel(button).textContent = label;
         }, 4000);
         return;
       }
@@ -539,7 +649,7 @@
       if (!target) return;
       var wrapped = target.classList.toggle('wrap');
       button.setAttribute('aria-pressed', wrapped ? 'true' : 'false');
-      button.textContent = wrapped ? 'Unwrap' : 'Wrap';
+      buttonLabel(button).textContent = wrapped ? 'Unwrap' : 'Wrap';
       try {
         localStorage.setItem('mantisbin:wrap', wrapped ? '1' : '0');
       } catch (e) {
@@ -558,7 +668,7 @@
       if (target) {
         target.classList.add('wrap');
         btn.setAttribute('aria-pressed', 'true');
-        btn.textContent = 'Unwrap';
+        buttonLabel(btn).textContent = 'Unwrap';
       }
     }
   }
