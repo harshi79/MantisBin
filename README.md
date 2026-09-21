@@ -101,11 +101,6 @@ wrangler secret put IMGTREE_API_KEY
 `THUMBNAIL_HOSTS` is also the page's `img-src`, so only hosts on that list can
 ever be embedded — adding a host is the *only* way to allow images from it.
 
-For a production Worker, prefer imgtree over the default: catbox filters
-uploads from datacenter IPs (which is what Workers egress from), so anonymous
-catbox uploads can be refused in production while working from your laptop —
-see `DEPLOY-THUMBNAILS.md` for the symptoms and the one-command fix.
-
 The schema is created automatically on first request. A cron trigger
 (`13 * * * *`) deletes expired pastes and prunes sessions, view-dedupe rows and
 rate-limit buckets; creation also sweeps opportunistically, so expired content

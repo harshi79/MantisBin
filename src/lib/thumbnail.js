@@ -36,18 +36,10 @@ import {
   THUMBNAIL_DEFAULT_HOSTS,
 } from '../config.js';
 
-/** @typedef {{ ok: boolean, value?: string, error?: string, status?: number, retryAfter?: number }} Result */
+/** @typedef {{ ok: boolean, value?: string, error?: string }} Result */
 
 /** Milliseconds before an upload to an image host is abandoned. */
 const UPLOAD_TIMEOUT_MS = 20_000;
-
-/**
- * Identifies outbound uploads to the image hosts. Some hosts filter anonymous
- * traffic from datacenter IPs (which is what Cloudflare Workers egress from),
- * so an honest UA is the difference between "filtered as bulk slop" and a
- * diagnosable response — and it tells the host's operator who to contact.
- */
-const UPLOAD_USER_AGENT = 'MantisBin/thumbnail-upload (+https://github.com/harshi79/MantisBin)';
 
 /** `https://imgtree.co` (or the operator's own deployment), without a trailing slash. */
 export function imgtreeBaseUrl(env) {
@@ -192,111 +184,11 @@ export function uploadFilename(type) {
 }
 
 /**
- * An image-host failure that already knows how it should surface: a safe,
- * user-facing message plus the HTTP status the route should answer with.
- * `detail` is the operator-oriented half — provider, status and a sanitized
- * fragment — and goes to `wrangler tail`, never to the reader.
- */
-class UpstreamError extends Error {
-  /**
-   * @param {string} message user-safe message
-   * @param {{ status?: number, retryAfter?: number | null, detail?: string }} [options]
-   */
-  constructor(message, options = {}) {
-    super(message);
-    this.name = 'UpstreamError';
-    this.status = options.status || 502;
-    this.retryAfter = options.retryAfter ?? null;
-    this.detail = options.detail || '';
-  }
-}
-
-/**
- * Keep a one-line, plain-text fragment of an upstream reply for user messages
- * and logs. Anything that looks like markup — a block page, an HTML error
- * document — is dropped, so host HTML can never leak into a response.
- * @param {unknown} text
- * @param {number} [max]
- */
-function cleanSnippet(text, max = 120) {
-  // Collapse whitespace, strip control characters, drop anything with markup.
-  const oneLine = String(text || '')
-    .replace(/\s+/g, ' ')
-    .replace(/[\x00-\x1F\x7F]/g, '')
-    .trim();
-  if (!oneLine || /[<>]/.test(oneLine)) return '';
-  return oneLine.slice(0, max);
-}
-
-/**
- * Pull a human sentence out of an upstream error body. Plain-text APIs (catbox)
- * are used as-is; a JSON error document contributes its `error`/`message`
- * field instead of raw braces.
- * @param {unknown} text
- */
-function messageFromUpstreamBody(text) {
-  const raw = String(text || '').trim();
-  if (!raw) return '';
-  if (raw.startsWith('{') || raw.startsWith('[')) {
-    try {
-      const data = JSON.parse(raw);
-      const candidate = data?.error || data?.message || data?.images?.[0]?.error;
-      return cleanSnippet(candidate);
-    } catch {
-      return '';
-    }
-  }
-  return cleanSnippet(raw);
-}
-
-/** @param {Response} response */
-function retryAfterOf(response) {
-  const raw = Number(response?.headers?.get?.('retry-after'));
-  return Number.isFinite(raw) && raw > 0 ? Math.min(Math.ceil(raw), 3600) : null;
-}
-
-/**
- * Map an upstream HTTP error status to an `UpstreamError`. Rate limiting and
- * "too large" pass through with their own status so the caller — and the
- * reader — can act on them; anything else is a 502 with the status and a
- * sanitized fragment attached for the operator.
- * @param {'catbox' | 'imgtree'} provider
- * @param {Response} response
- * @param {unknown} snippet raw upstream body, for context only
- */
-function httpFailure(provider, response, snippet) {
-  const status = response?.status || 502;
-  const detail = messageFromUpstreamBody(snippet);
-  const quoted = detail ? ` ("${detail}")` : '';
-  const logDetail = `${provider} responded ${status}${cleanSnippet(snippet, 200) ? `: ${cleanSnippet(snippet, 200)}` : ''}`;
-  if (status === 429) {
-    return new UpstreamError(
-      'The image host is rate-limiting uploads. Wait a minute and try again, or paste an image URL instead.',
-      { status: 429, retryAfter: retryAfterOf(response) || 60, detail: logDetail },
-    );
-  }
-  if (status === 413) {
-    return new UpstreamError(
-      'The image host rejected the image as too large. Try a smaller image, or paste an image URL instead.',
-      { status: 413, detail: logDetail },
-    );
-  }
-  return new UpstreamError(
-    detail
-      ? `The image host refused the upload${quoted}. Try again, or paste an image URL instead.`
-      : `The image host refused the upload (HTTP ${status}). Try again, or paste an image URL instead.`,
-    { status: 502, detail: logDetail },
-  );
-}
-
-/**
  * Forward one image to the configured host and return the URL it hands back.
  *
- * Never throws for a remote failure: the caller turns `{ ok: false }` into an
- * HTTP error with a readable message, because "catbox is down" is not a bug in
- * this paste. Most upstream failures are a 502; a 429 or 413 the host names
- * passes through with its own status (and `Retry-After`) so the reader can act
- * on it. The response URL is validated against the same allowlist as a
+ * Never throws for a remote failure: the caller turns `{ ok: false }` into a
+ * 502 with a readable message, because "catbox is down" is not a bug in this
+ * paste. The response URL is validated against the same allowlist as a
  * hand-typed one, so a compromised or misconfigured host cannot inject an
  * arbitrary origin into a page.
  *
@@ -324,33 +216,7 @@ export async function uploadThumbnail(blob, type, env) {
     if (error?.name === 'TimeoutError' || error?.name === 'AbortError') {
       return { ok: false, error: 'The image host timed out. Try again, or paste an image URL instead.' };
     }
-    if (error instanceof UpstreamError) {
-      console.warn('[mantisbin] thumbnail upload failed', {
-        provider,
-        status: error.status,
-        detail: error.detail || error.message,
-      });
-      const result = { ok: false, error: error.message, status: error.status };
-      if (error.retryAfter) result.retryAfter = error.retryAfter;
-      return result;
-    }
-    // With `redirect: 'error'` a redirect surfaces as a TypeError, not a
-    // response — name it, so a smuggled redirect and a dead host look different.
-    const message = String(error?.message || '');
-    const cause = String(error?.cause?.message || error?.cause || '');
-    if (/redirect/i.test(`${message} ${cause}`)) {
-      console.warn('[mantisbin] thumbnail upload failed', {
-        provider,
-        status: 502,
-        detail: cleanSnippet(message, 200) || 'upload redirect blocked',
-      });
-      return { ok: false, error: 'The image host redirected the upload unexpectedly. Try again, or paste an image URL instead.' };
-    }
-    console.warn('[mantisbin] thumbnail upload failed', {
-      provider,
-      status: 502,
-      detail: cleanSnippet(`${message} ${cause}`, 200) || 'unreachable',
-    });
+    console.warn('[mantisbin] thumbnail upload failed', error);
     return { ok: false, error: 'The image host could not be reached. Try again, or paste an image URL instead.' };
   }
 }
@@ -377,47 +243,17 @@ async function uploadToImgtree(blob, type, env) {
 
   const response = await fetch(`${imgtreeBaseUrl(env)}/api/v1/upload`, {
     method: 'POST',
-    headers: {
-      Authorization: `Bearer ${env.IMGTREE_API_KEY}`,
-      Accept: 'application/json',
-      'User-Agent': UPLOAD_USER_AGENT,
-    },
+    headers: { Authorization: `Bearer ${env.IMGTREE_API_KEY}`, Accept: 'application/json' },
     body,
     redirect: 'error',
     signal: timeoutSignal(UPLOAD_TIMEOUT_MS),
   });
   if (!response.ok) {
-    const snippet = await response.text().catch(() => '');
-    // A 401/403 is operator misconfiguration (missing, revoked or suspended
-    // key), not a reader error — the reader gets a plain apology while the
-    // log tells the operator exactly which secret to check.
-    if (response.status === 401 || response.status === 403) {
-      throw new UpstreamError(
-        'Image uploads are temporarily unavailable. Try again later, or paste an image URL instead.',
-        { status: 502, detail: `imgtree responded ${response.status} — the IMGTREE_API_KEY is missing, revoked or suspended` },
-      );
-    }
-    throw httpFailure('imgtree', response, snippet);
+    throw new Error(`imgtree responded ${response.status}`);
   }
-  let data;
-  try {
-    data = await response.json();
-  } catch {
-    throw new UpstreamError(
-      'The image host returned an unexpected response. Try again, or paste an image URL instead.',
-      { status: 502, detail: 'imgtree returned invalid JSON' },
-    );
-  }
+  const data = await response.json();
   const image = Array.isArray(data?.images) ? data.images[0] : null;
-  if (!image || image.error) {
-    const detail = messageFromUpstreamBody(image?.error);
-    throw new UpstreamError(
-      detail
-        ? `The image host refused the upload ("${detail}"). Try again, or paste an image URL instead.`
-        : 'The image host refused the upload. Try again, or paste an image URL instead.',
-      { status: 502, detail: `imgtree reported a per-file error: ${cleanSnippet(image?.error, 200) || '(no image in response)'}` },
-    );
-  }
+  if (!image || image.error) throw new Error(String(image?.error || 'imgtree returned no image'));
   // A paste page renders a card-sized picture, so the resized rendition is the
   // right one; `direct_url` (the untouched original) is the fallback.
   return String(image.thumb_url || image.direct_url || image.url || '').trim();
@@ -436,25 +272,13 @@ async function uploadToCatbox(blob, type, env) {
 
   const response = await fetch('https://catbox.moe/user/api.php', {
     method: 'POST',
-    headers: { 'User-Agent': UPLOAD_USER_AGENT, Accept: 'text/plain,*/*' },
     body,
     redirect: 'error',
     signal: timeoutSignal(UPLOAD_TIMEOUT_MS),
   });
   const text = (await response.text()).trim();
-  if (!response.ok) throw httpFailure('catbox', response, text);
-  // Catbox answers `200 OK` with an error sentence when it refuses an upload —
-  // for example when it filters traffic from datacenter IPs, which is what
-  // Workers egress from. Surface the sentence when it is plain text; a block
-  // page stays in the log only.
-  if (!/^https:\/\//i.test(text)) {
-    const detail = messageFromUpstreamBody(text);
-    throw new UpstreamError(
-      detail
-        ? `The image host refused the upload ("${detail}"). Try again, or paste an image URL instead.`
-        : 'The image host refused the upload. Try again, or paste an image URL instead.',
-      { status: 502, detail: `catbox refused the upload: ${cleanSnippet(text, 200) || '(empty response)'}` },
-    );
-  }
+  if (!response.ok) throw new Error(`catbox responded ${response.status}: ${text.slice(0, 120)}`);
+  // Catbox answers `200 OK` with an error sentence when it refuses an upload.
+  if (!/^https:\/\//i.test(text)) throw new Error(`catbox refused the upload: ${text.slice(0, 120)}`);
   return text;
 }
