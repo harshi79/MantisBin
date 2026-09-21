@@ -40,7 +40,6 @@ import {
 } from '../lib/unlock.js';
 import { addLineAnchors, renderCode } from '../lib/highlight.js';
 import {
-  allowedThumbnailHosts,
   safeThumbnailUrl,
   uploadThumbnail,
   uploadsEnabled,
@@ -150,7 +149,7 @@ async function resolvePassphraseHash(state) {
  *   create + empty            -> no thumbnail
  *   edit   + empty            -> keep the stored URL untouched
  *   edit   + "remove" checked -> clear it
- *   anything else             -> set (validated against the host allowlist)
+ *   anything else             -> set (validated as an https URL)
  *
  * @param {Record<string, string>} form
  * @param {'create' | 'edit'} mode
@@ -715,7 +714,12 @@ export async function uploadThumbnailImage(ctx) {
   if (!check.ok) throw new HttpError(415, check.error);
 
   const result = await uploadThumbnail(/** @type {any} */ (file), String(check.value), ctx.env);
-  if (!result.ok) throw new HttpError(502, result.error);
+  if (!result.ok) {
+    // Most upstream failures are a 502, but a 429/413 the host names passes
+    // through with its own status (and Retry-After) so the reader can act on it.
+    const extra = result.retryAfter ? { 'Retry-After': String(result.retryAfter) } : undefined;
+    throw new HttpError(result.status || 502, result.error, extra);
+  }
   return jsonResponse({ url: result.value }, 201, {}, { noindex: true });
 }
 
@@ -847,7 +851,6 @@ export async function docs(ctx) {
   const body = docsPage({
     ...pageCtx(ctx),
     baseUrl: ctx.url.origin,
-    thumbnailHosts: allowedThumbnailHosts(ctx.env),
     thumbnailUploads: uploadsEnabled(ctx.env),
   });
   return htmlResponse(body, 200, {}, { cache: 'public, max-age=300' });

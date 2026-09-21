@@ -178,8 +178,8 @@ export function editorPage(options) {
               visible even on a password-protected or one-time paste, and it remains on that host after this paste
               expires or is deleted. Never put anything private in it.
               ${options.uploads
-                ? html`Images are resized to ${THUMBNAIL.width}×${THUMBNAIL.height} in your browser before upload; MantisBin stores only the link.`
-                : html`Paste a link to an image on an allowed host.`}
+                ? html`Choose an image to upload it to catbox.moe (resized to ${THUMBNAIL.width}×${THUMBNAIL.height} in your browser first), or paste any image URL — MantisBin stores only the link.`
+                : html`Paste any https image URL.`}
             </p>
             ${canRemoveThumbnail
               ? html`<label class="check"><input type="checkbox" name="remove_thumbnail" value="1" data-thumbnail-remove ${values.thumbnail_remove ? html`checked` : ''}><span>Remove the current thumbnail</span></label>`

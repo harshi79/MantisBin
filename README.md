@@ -15,7 +15,7 @@ A fast, minimal paste-sharing utility for plain text and code.
 - Burn after reading: a one-time paste is deleted the moment it is first viewed (or first read, including `raw`/API)
 - Duplicate any paste you can read: a copy gets its own URL, expiration and owner, and the original is untouched
 - Auto language detection reads the filename extension first, then bounded content fingerprints, and resolves once; optional dependency-free QR sharing uses only the canonical URL
-- Optional thumbnails: one image per paste, resized to 1200 × 630 in the browser, uploaded to a free image host (catbox or [imgtree](https://imgtree.co/api-docs)) — the database stores only the link. A thumbnail is **public even on a password-protected paste**, and the UI says so
+- Optional thumbnails: one image per paste, resized to 1200 × 630 in the browser and uploaded to [catbox.moe](https://catbox.moe) — or paste any `https` image URL by hand. The database stores only the link. A thumbnail is **public even on a password-protected paste**, and the UI says so
 - Light, dark, ocean and system themes; system fonts only, no webfont/CDN requests
 - Public JSON API with key-gated writes
 - Built for **Cloudflare Workers + Cloudflare Assets**, backed by **Turso (libSQL/SQLite)**
@@ -84,22 +84,31 @@ local runs and the production Worker keep their existing anti-framing headers.
 
 ### Thumbnails (optional)
 
-Nothing is required: with no configuration, thumbnail uploads go to catbox.moe
-anonymously and the database still only ever stores the returned link.
+Uploads always go to **catbox.moe**, and the database only ever stores the
+returned link. Add a `CATBOX_USERHASH` in the dashboard so uploads are accepted
+from the Worker's datacenter IPs (catbox filters *anonymous* datacenter traffic)
+and are deletable from your catbox account — get it from your catbox.moe account
+settings.
 
 ```bash
-# Use imgtree instead of catbox (https://imgtree.co/api-docs):
-wrangler secret put IMGTREE_API_KEY
-# Optional extras, as secrets or wrangler.jsonc vars:
-#   IMGTREE_BASE_URL   your own imgtree deployment (default https://imgtree.co)
-#   IMGTREE_ALBUM_ID   album to file uploads under
-#   CATBOX_USERHASH    makes anonymous catbox uploads deletable later
-#   THUMBNAIL_HOSTS    extra allowed image hosts, comma separated
+# Recommended for a deployed Worker (get the hash from catbox.moe settings):
+wrangler secret put CATBOX_USERHASH
+# Optional:
+#   THUMBNAIL_HOSTS    extra hosts to list in the page's img-src (see below)
 #   THUMBNAIL_UPLOADS  set to "off" to accept only hand-entered URLs
 ```
 
-`THUMBNAIL_HOSTS` is also the page's `img-src`, so only hosts on that list can
-ever be embedded — adding a host is the *only* way to allow images from it.
+Authors can also paste **any `https` image URL** by hand — a link to an image on
+any host is accepted (only `http`, `data:` and credential-bearing URLs are
+refused). Because arbitrary remote images are allowed, the page's `img-src`
+permits `https:` images generally; `THUMBNAIL_HOSTS` just names extra hosts to
+list explicitly. A remote image can log the IP of everyone who opens a paste,
+which the editor warns about.
+
+Without a `CATBOX_USERHASH`, uploads are attempted anonymously, but catbox
+filters datacenter IPs (which is what Workers egress from), so anonymous uploads
+can be refused in production while working from your laptop — see
+`DEPLOY-THUMBNAILS.md`.
 
 The schema is created automatically on first request. A cron trigger
 (`13 * * * *`) deletes expired pastes and prunes sessions, view-dedupe rows and
@@ -120,7 +129,7 @@ values — `npm run dev` then uses the real database.
 | `GET /p/:id` | View a paste (public, unlisted, `noindex`). Shows the unlock screen when the paste is protected; consumes a burn-after-reading paste |
 | `POST /p/:id/unlock` | Verify a protected paste's passphrase, set the signed unlock cookie, redirect back to the paste |
 | `GET /p/:id/fork` | "Duplicate" — a pre-filled editor for a copy. Saving posts to the ordinary `POST /p`, so create limits and validation apply unchanged |
-| `POST /p/thumbnail` | Upload one image to the configured host and get its URL back (JSON). Stores nothing, creates no paste |
+| `POST /p/thumbnail` | Upload one image to catbox.moe and get its URL back (JSON). Stores nothing, creates no paste |
 | `GET /p/:id/raw` | Exact bytes as `text/plain` — for `curl`, scripts, terminals (`?download=1` forces attachment) |
 | `GET /p/:id/qr` | Server-rendered QR share page; encodes only the canonical paste URL |
 | `GET /p/:id/qr.svg` | Dependency-free QR image (`?line=N&download=1` saves it) |
@@ -437,14 +446,13 @@ Design rules the codebase follows:
   existing 256 KiB heavy-render path. It uses only inert fingerprints and a
   capped JSON parse; pasted text is never executed or imported, and ambiguous
   input resolves to stored `plaintext`.
-- Thumbnails store a URL, never bytes. Only `https` URLs on allowlisted hosts
-  (`files.catbox.moe`, `imgtree.co`, plus anything in `THUMBNAIL_HOSTS`) can be
-  saved, and the same list is the page's `img-src`, so a URL that somehow got
-  stored off-list still cannot load in a reader's browser — an arbitrary remote
-  image would otherwise log the IP of everyone who opens a paste. `http:`,
-  `data:` and URLs carrying credentials are refused. Stored URLs are
-  re-validated at render time, so shrinking the allowlist hides old images
-  immediately, with no migration.
+- Thumbnails store a URL, never bytes. Any `https` image URL may be saved
+  (uploads land on catbox, hand-typed links may point anywhere); only `http:`,
+  `data:` and URLs carrying credentials are refused. Because arbitrary remote
+  images are allowed, the page's `img-src` permits `https:` images generally —
+  the trade-off is that a remote image can log the IP of everyone who opens a
+  paste, which the editor warns about. Stored URLs are re-validated (protocol and
+  shape) at render time.
 - **A thumbnail is public by construction.** It lives on an image host that does
   no authentication, so it is visible to anyone with its URL — including on a
   password-protected or burn-after-reading paste, where it deliberately stays on
@@ -453,10 +461,9 @@ Design rules the codebase follows:
   passphrase remain fully gated. Deleting, expiring or burning a paste drops the
   row and the link, but the file stays on the third-party host — a one-time
   paste's picture is not one-time, and the editor says so.
-- Uploading forwards exactly one bounded request (size checked before the body
-  is read, timeout, no redirects followed), is rate limited per IP/account, and
-  validates the host's reply against the same allowlist before storing it, so a
-  compromised or misconfigured host cannot inject a foreign origin into a page.
+- Uploading forwards exactly one bounded request to catbox (size checked before
+  the body is read, timeout, no redirects followed), is rate limited per
+  IP/account, and validates the reply (must be an `https` URL) before storing it.
   The endpoint takes no paste id, so an upload can never burn, unlock or
   overwrite anything.
 - QR sharing is local and dependency-free. The QR encoder receives only the

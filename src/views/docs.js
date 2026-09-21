@@ -8,11 +8,10 @@ import { layout } from './layout.js';
 const expirationOptions = EXPIRATIONS.map((e) => (e.seconds ? `${e.id} (${e.label.toLowerCase()})` : e.id)).join(', ');
 
 /**
- * @param {{ theme: string, user: any, path: string, baseUrl: string, thumbnailHosts?: string[], thumbnailUploads?: boolean }} options
+ * @param {{ theme: string, user: any, path: string, baseUrl: string, thumbnailUploads?: boolean }} options
  */
 export function docsPage(options) {
   const base = options.baseUrl.replace(/\/$/, '');
-  const thumbnailHosts = options.thumbnailHosts || [];
   const body = html`
     <div class="docs">
       <div class="page-head">
@@ -53,7 +52,7 @@ X-API-Key: mb_…</code></pre>
           <tr><td><code>expiresIn</code></td><td>string</td><td>optional: ${expirationOptions}; default <code>1w</code></td></tr>
           <tr><td><code>password</code></td><td>string</td><td>optional: ${LIMITS.passphraseMin}–${LIMITS.passphraseMax} chars; the paste is locked until it is entered</td></tr>
           <tr><td><code>burnAfter</code></td><td>string</td><td>optional: ${BURN_MODES.map((mode) => `<code>${mode.id}</code>`).join(', ')}; default <code>never</code></td></tr>
-          <tr><td><code>thumbnailUrl</code></td><td>string</td><td>optional: an <code>https</code> image URL on an allowed host (see <a href="#thumbnails">Thumbnails</a>). <b>Public even on a protected paste.</b></td></tr>
+          <tr><td><code>thumbnailUrl</code></td><td>string</td><td>optional: any <code>https</code> image URL (see <a href="#thumbnails">Thumbnails</a>). <b>Public even on a protected paste.</b></td></tr>
         </tbody>
       </table>
       <pre><code>curl -sS -X POST ${base}/api/pastes \\
@@ -222,29 +221,31 @@ curl -sS ${base}/api/pastes/a8Kx92Lm        # 404 — it is gone</code></pre>
         thumbnail.
       </div>
       <p>
-        Only these hosts may be stored or embedded${thumbnailHosts.length ? html`: ${thumbnailHosts.map((host, index) => html`${index ? ', ' : ''}<code>${host}</code>`)}` : ''}.
-        The same list is the page's <code>img-src</code>, so a URL anywhere else is refused with
-        <code>400</code> and can never load in a reader's browser. <code>http</code> URLs,
-        <code>data:</code> payloads and URLs carrying credentials are rejected too.
+        A <code>thumbnailUrl</code> may point at <b>any <code>https</code> image host</b> — uploads
+        land on <code>catbox.moe</code>, and you can also paste a link to an image anywhere else.
+        Only the protocol is enforced: <code>http</code> URLs, <code>data:</code> payloads and URLs
+        carrying credentials are rejected. Because arbitrary remote images are allowed, the page's
+        <code>img-src</code> permits <code>https:</code> images generally, which is why the public
+        warning above matters.
       </p>
       ${options.thumbnailUploads
         ? html`<div class="endpoint"><span class="method">POST</span> <code>/p/thumbnail</code> <span class="muted small">— upload an image, get a URL (no key needed)</span></div>
             <p>
               Send <code>multipart/form-data</code> with an <code>image</code> field
               (${THUMBNAIL.types.map((type) => type.replace('image/', '')).join(', ')}; up to
-              ${formatBytes(THUMBNAIL.maxBytes)}). The bytes are forwarded once to the configured image
-              host and the JSON reply is just the link, which you then send as
+              ${formatBytes(THUMBNAIL.maxBytes)}). The bytes are forwarded once to <code>catbox.moe</code>
+              and the JSON reply is just the link, which you then send as
               <code>thumbnailUrl</code>. Uploading creates no paste and modifies nothing.
             </p>
             <pre><code>curl -sS -X POST ${base}/p/thumbnail -F "image=@card.jpg"
 # {"url":"https://files.catbox.moe/ab12cd.jpg"}</code></pre>`
-        : html`<p class="muted small">Image uploading is disabled on this instance — supply a <code>thumbnailUrl</code> on an allowed host instead.</p>`}
+        : html`<p class="muted small">Image uploading is disabled on this instance — supply a <code>thumbnailUrl</code> (any https image URL) instead.</p>`}
       <p>
         <code>PATCH /api/pastes/:id</code> follows the usual rule: omit <code>thumbnailUrl</code> to
         keep the current image, send a URL to replace it, or <code>null</code> to remove it. A fork
         reuses the source's image unless the copy overrides it. Every paste object reports its
         <code>thumbnailUrl</code> (<code>null</code> when there is none), and
-        <code>GET /api/meta</code> lists the allowed hosts, size cap and accepted types.
+        <code>GET /api/meta</code> reports the size cap, accepted types and whether uploads are on.
       </p>
 
       <h2 id="profiles">Profiles & visibility</h2>

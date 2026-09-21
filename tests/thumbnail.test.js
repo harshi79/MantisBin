@@ -4,9 +4,10 @@
  * The properties that matter, in order of how much damage getting them wrong
  * would do:
  *
- *   1. Only allowlisted image hosts are ever stored or embedded, and the page's
- *      `img-src` says the same thing (an arbitrary remote image is an IP logger
- *      for every reader of a paste).
+ *   1. Any https image URL may be stored and embedded (uploads land on catbox,
+ *      links may point anywhere), but only https — never data: bytes or
+ *      plaintext http. A thumbnail is an off-site image, so the editor warns
+ *      that it can log the IP of everyone who opens a paste.
  *   2. A thumbnail is *public*: it survives on a password-protected paste's lock
  *      screen on purpose, and every surface says so — but the content, title and
  *      passphrase still never leak.
@@ -31,20 +32,40 @@ import { contentSecurityPolicy } from '../src/lib/http.js';
 import { THUMBNAIL } from '../src/config.js';
 
 const CATBOX = 'https://files.catbox.moe/ab12cd.jpg';
-const IMGTREE = 'https://imgtree.co/thumbnail/xyz789.webp';
+// An image on some other host: hand-typed links may point anywhere on https.
+const OTHER_HOST = 'https://cdn.example.com/thumbnail/xyz789.webp';
+
+/**
+ * POST one small JPEG to the upload endpoint through the app's real router.
+ * @param {any} app
+ */
+async function uploadImage(app) {
+  const body = new FormData();
+  body.append('image', new Blob([new Uint8Array(64)], { type: 'image/jpeg' }), 'a.jpg');
+  const request = new Request('https://mantisbin.test/p/thumbnail', { method: 'POST', body });
+  return app.request('/p/thumbnail', {
+    method: 'POST',
+    body: new Uint8Array(await request.arrayBuffer()),
+    headers: { 'content-type': request.headers.get('content-type') },
+  });
+}
 
 // ---------------------------------------------------------------------------
-// URL validation + host allowlist
+// URL validation (any https host)
 // ---------------------------------------------------------------------------
 
-test('only https URLs on allowed hosts are accepted', () => {
-  for (const url of [CATBOX, IMGTREE, 'https://i.imgtree.co/a.png', 'https://cdn.files.catbox.moe/a.png']) {
+test('any https URL is accepted, but only https', () => {
+  for (const url of [
+    CATBOX,
+    OTHER_HOST,
+    'https://i.imgur.com/a.png',
+    'https://cdn.files.catbox.moe/a.png',
+    'https://anything.example.org/pic.jpg',
+  ]) {
     assert.equal(validateThumbnailUrl(url, {}).ok, true, url);
   }
   for (const url of [
     'http://files.catbox.moe/a.jpg', // plaintext: mixed content + IP leak
-    'https://evil.example.com/a.jpg', // not allowlisted
-    'https://files.catbox.moe.evil.com/a.jpg', // suffix-confusion
     'https://user:pw@files.catbox.moe/a.jpg', // credentials
     'data:image/png;base64,iVBORw0KGgo=', // bytes, which we promised not to store
     'javascript:alert(1)',
@@ -65,23 +86,19 @@ test('an empty value is a valid "no thumbnail", and over-long URLs are refused',
   assert.equal(validateThumbnailUrl(long, {}).ok, false);
 });
 
-test('operators extend the allowlist without code changes', () => {
+test('operators can name extra default img-src hosts without code changes', () => {
   const env = { THUMBNAIL_HOSTS: 'img.example.com, cdn.example.org' };
-  assert.equal(validateThumbnailUrl('https://img.example.com/a.jpg', env).ok, true);
-  assert.equal(validateThumbnailUrl('https://cdn.example.org/a.jpg', env).ok, true);
-  assert.equal(validateThumbnailUrl('https://img.example.com/a.jpg', {}).ok, false);
-
-  // A self-hosted imgtree contributes its own host automatically.
-  const selfHosted = { IMGTREE_BASE_URL: 'https://img.mycompany.dev/' };
-  assert.equal(validateThumbnailUrl('https://img.mycompany.dev/thumbnail/a.webp', selfHosted).ok, true);
-  assert.ok(allowedThumbnailHosts(selfHosted).includes('img.mycompany.dev'));
+  assert.ok(allowedThumbnailHosts(env).includes('img.example.com'));
+  assert.ok(allowedThumbnailHosts(env).includes('cdn.example.org'));
+  // catbox is always listed by default.
+  assert.ok(allowedThumbnailHosts({}).includes('files.catbox.moe'));
 });
 
-test('safeThumbnailUrl re-validates stored rows, so shrinking the allowlist hides old images', () => {
-  const env = { THUMBNAIL_HOSTS: 'img.example.com' };
-  assert.equal(safeThumbnailUrl('https://img.example.com/a.jpg', env), 'https://img.example.com/a.jpg');
-  // Same row, allowlist no longer contains the host: nothing is rendered.
-  assert.equal(safeThumbnailUrl('https://img.example.com/a.jpg', {}), null);
+test('safeThumbnailUrl re-validates stored rows, keeping any https URL', () => {
+  assert.equal(safeThumbnailUrl('https://img.example.com/a.jpg', {}), 'https://img.example.com/a.jpg');
+  assert.equal(safeThumbnailUrl(CATBOX, {}), CATBOX);
+  // A stored http/data value is still rejected on read (defence in depth).
+  assert.equal(safeThumbnailUrl('http://img.example.com/a.jpg', {}), null);
   assert.equal(safeThumbnailUrl(null, {}), null);
   assert.equal(hasThumbnail({ thumbnail_url: CATBOX }), true);
   assert.equal(hasThumbnail({ thumbnail_url: null }), false);
@@ -91,25 +108,27 @@ test('safeThumbnailUrl re-validates stored rows, so shrinking the allowlist hide
 // Content-Security-Policy
 // ---------------------------------------------------------------------------
 
-test('img-src lists the exact image hosts and never a blanket https:', () => {
+test('img-src allows https images (any host) while everything else stays locked down', () => {
   const policy = contentSecurityPolicy({ THUMBNAIL_HOSTS: 'img.example.com' });
   const imgSrc = policy.split('; ').find((directive) => directive.startsWith('img-src'));
   assert.match(imgSrc, /'self'/);
+  // Any https image is allowed, since a hand-typed thumbnail may point anywhere.
+  assert.match(imgSrc, /\bhttps:(?!\/\/)/, 'img-src must permit https: images generally');
+  // Default hosts are still listed (harmless, documents the upload target).
   assert.match(imgSrc, /https:\/\/files\.catbox\.moe/);
-  assert.match(imgSrc, /https:\/\/img\.example\.com/);
-  assert.doesNotMatch(imgSrc, /https:(?!\/\/)/, 'a wildcard https: would allow any image host');
   // Everything else stays locked down.
   assert.match(policy, /default-src 'none'/);
   assert.match(policy, /script-src 'self'/);
+  assert.doesNotMatch(policy, /script-src [^;]*https:(?!\/\/)/, 'only img-src is widened');
   assert.match(policy, /frame-ancestors 'none'/);
 });
 
-test('a page served by the app carries the extended img-src', async () => {
-  const app = await createApp({ env: { THUMBNAIL_HOSTS: 'img.example.com' } });
+test('a page served by the app carries the https img-src', async () => {
+  const app = await createApp();
   try {
     const res = await app.request('/');
     const policy = res.headers.get('content-security-policy');
-    assert.match(policy, /img-src [^;]*https:\/\/img\.example\.com/);
+    assert.match(policy, /img-src [^;]*\bhttps:(?!\/\/)/);
     assert.match(policy, /img-src [^;]*https:\/\/files\.catbox\.moe/);
   } finally {
     await app.close();
@@ -157,19 +176,31 @@ test('a paste without a thumbnail is completely unchanged', async () => {
   }
 });
 
-test('a disallowed host is rejected with a helpful error and the paste is not created', async () => {
+test('an image URL on any https host is accepted and stored', async () => {
   const app = await createApp();
   try {
     const res = await app.request('/p', {
-      body: form({ title: 'bad.txt', content: 'keep this text', thumbnail_url: 'https://tracker.example.com/pixel.gif' }),
+      body: form({ title: 'ok.txt', content: 'keep this text', thumbnail_url: OTHER_HOST }),
+    });
+    const id = pasteIdFrom(res);
+    assert.equal((await app.db.get('SELECT thumbnail_url FROM pastes WHERE id = ?', [id])).thumbnail_url, OTHER_HOST);
+  } finally {
+    await app.close();
+  }
+});
+
+test('a non-https thumbnail is rejected with a helpful error and the paste is not created', async () => {
+  const app = await createApp();
+  try {
+    const res = await app.request('/p', {
+      body: form({ title: 'bad.txt', content: 'keep this text', thumbnail_url: 'http://tracker.example.com/pixel.gif' }),
     });
     assert.equal(res.status, 400);
     const page = await res.text();
-    assert.match(page, /Thumbnails may only be hosted on/);
-    assert.match(page, /files\.catbox\.moe/);
+    assert.match(page, /must start with https/i);
     // The editor keeps the reader's work, including the URL they typed.
     assert.match(page, /keep this text/);
-    assert.match(page, /value="https:\/\/tracker\.example\.com\/pixel\.gif"/);
+    assert.match(page, /value="http:\/\/tracker\.example\.com\/pixel\.gif"/);
     assert.equal(Number((await app.db.get('SELECT COUNT(*) AS n FROM pastes')).n), 0);
   } finally {
     await app.close();
@@ -215,10 +246,10 @@ test('owners can add, replace and remove a thumbnail by editing', async () => {
 
     // Replacing.
     await app.request(`/p/${id}/edit`, {
-      body: form({ title: 'a.txt', content: 'body v3', thumbnail_url: IMGTREE }),
+      body: form({ title: 'a.txt', content: 'body v3', thumbnail_url: OTHER_HOST }),
       jar: 'edit1',
     });
-    assert.equal((await app.db.get('SELECT thumbnail_url FROM pastes WHERE id = ?', [id])).thumbnail_url, IMGTREE);
+    assert.equal((await app.db.get('SELECT thumbnail_url FROM pastes WHERE id = ?', [id])).thumbnail_url, OTHER_HOST);
 
     // The edit form offers the explicit removal checkbox once one is set.
     const formPage = await (await app.request(`/p/${id}/edit`, { jar: 'edit1' })).text();
@@ -348,14 +379,14 @@ test('the API creates, reports, updates and clears a thumbnail', async () => {
     assert.equal(cleared.status, 200);
     assert.equal((await cleared.json()).thumbnailUrl, null);
 
-    // A bad host is a 400, not a silent drop.
+    // A non-https URL is a 400, not a silent drop.
     const bad = await app.request(`/api/pastes/${paste.id}`, {
       method: 'PATCH',
       headers: auth,
-      body: jsonBody({ thumbnailUrl: 'https://evil.example.com/x.png' }),
+      body: jsonBody({ thumbnailUrl: 'http://evil.example.com/x.png' }),
     });
     assert.equal(bad.status, 400);
-    assert.match((await bad.json()).error, /may only be hosted on/);
+    assert.match((await bad.json()).error, /must start with https/i);
   } finally {
     await app.close();
   }
@@ -446,13 +477,12 @@ test('uploads are validated before a single byte leaves the Worker', () => {
   assert.equal(uploadFilename('image/jpeg'), 'thumbnail.jpg');
 });
 
-test('the provider is chosen from the environment and can be switched off', () => {
-  assert.equal(uploadProvider({ IMGTREE_API_KEY: 'k' }), 'imgtree');
+test('uploads go to catbox by default and can be switched off', () => {
   assert.equal(uploadProvider({}), 'catbox');
+  assert.equal(uploadProvider({ CATBOX_USERHASH: 'abc' }), 'catbox');
+  assert.equal(uploadsEnabled({}), true);
   assert.equal(uploadProvider({ THUMBNAIL_UPLOADS: 'off' }), null);
   assert.equal(uploadsEnabled({ THUMBNAIL_UPLOADS: 'off' }), false);
-  // An imgtree key wins even when uploads would otherwise be off by default.
-  assert.equal(uploadsEnabled({ IMGTREE_API_KEY: 'k' }), true);
 });
 
 test('the upload route refuses non-multipart bodies and reports when it is disabled', async () => {
@@ -503,12 +533,12 @@ test('an upload with no image field is a 400, and oversized ones are refused ear
   }
 });
 
-test('a rejected upload response from the host never becomes a stored URL', async () => {
+test('a non-URL upload response from the host never becomes a stored URL', async () => {
   const app = await createApp();
   const realFetch = globalThis.fetch;
-  // A hostile/misconfigured host answering with someone else's origin must not
-  // end up in the database or in a page.
-  globalThis.fetch = async () => new Response('https://evil.example.com/tracker.gif', { status: 200 });
+  // Catbox answers 200 with a plain sentence when it refuses; that must never be
+  // mistaken for a link and stored.
+  globalThis.fetch = async () => new Response('not-a-url', { status: 200 });
   try {
     const body = new FormData();
     body.append('image', new Blob([new Uint8Array(64)], { type: 'image/jpeg' }), 'a.jpg');
@@ -519,7 +549,7 @@ test('a rejected upload response from the host never becomes a stored URL', asyn
       headers: { 'content-type': request.headers.get('content-type') },
     });
     assert.equal(res.status, 502);
-    assert.match((await res.json()).error, /unexpected domain/);
+    assert.match((await res.json()).error, /refused the upload/);
   } finally {
     globalThis.fetch = realFetch;
     await app.close();
@@ -556,17 +586,16 @@ test('a successful upload returns the host URL and nothing is stored server-side
   }
 });
 
-test('imgtree is used when a key is configured, with Bearer auth and its thumb URL', async () => {
-  const app = await createApp({ env: { IMGTREE_API_KEY: 'test-key', IMGTREE_BASE_URL: 'https://imgtree.co' } });
+test('uploads POST to catbox and forward the configured userhash', async () => {
+  const app = await createApp({ env: { CATBOX_USERHASH: 'my-userhash' } });
   const realFetch = globalThis.fetch;
   /** @type {any} */
   let seen = null;
   globalThis.fetch = async (url, init) => {
-    seen = { url: String(url), auth: init?.headers?.Authorization };
-    return Response.json({
-      success: true,
-      images: [{ id: 'abc', url: 'https://imgtree.co/i/abc', direct_url: 'https://imgtree.co/direct/abc.jpg', thumb_url: IMGTREE }],
-    });
+    // Read the multipart body so we can assert the userhash was included.
+    const bodyText = await new Response(init?.body).text().catch(() => '');
+    seen = { url: String(url), method: init?.method, bodyText };
+    return new Response(CATBOX, { status: 200 });
   };
   try {
     const body = new FormData();
@@ -578,9 +607,11 @@ test('imgtree is used when a key is configured, with Bearer auth and its thumb U
       headers: { 'content-type': request.headers.get('content-type') },
     });
     assert.equal(res.status, 201);
-    assert.deepEqual(await res.json(), { url: IMGTREE });
-    assert.equal(seen.url, 'https://imgtree.co/api/v1/upload');
-    assert.equal(seen.auth, 'Bearer test-key');
+    assert.deepEqual(await res.json(), { url: CATBOX });
+    assert.equal(seen.url, 'https://catbox.moe/user/api.php');
+    assert.equal(seen.method, 'POST');
+    assert.match(seen.bodyText, /reqtype/);
+    assert.match(seen.bodyText, /my-userhash/);
   } finally {
     globalThis.fetch = realFetch;
     await app.close();
@@ -607,6 +638,135 @@ test('an image host that is down is a 502, never a 500 crash', async () => {
   } finally {
     globalThis.fetch = realFetch;
     await app.close();
+  }
+});
+
+test('a refused upload surfaces the host reason instead of a generic error', async () => {
+  const app = await createApp();
+  const realFetch = globalThis.fetch;
+  // Catbox answers `200 OK` with an error sentence when it refuses an upload —
+  // for example when it filters traffic from datacenter IPs, which is what
+  // Workers egress from. That sentence is the diagnosis; swallowing it into
+  // "could not be reached" sends everyone chasing the wrong outage.
+  globalThis.fetch = async () => new Response('Invalid Uploader', { status: 200 });
+  try {
+    const res = await uploadImage(app);
+    assert.equal(res.status, 502);
+    const body = await res.json();
+    assert.match(body.error, /refused the upload/);
+    assert.match(body.error, /Invalid Uploader/);
+    assert.match(body.error, /paste an image URL instead/);
+  } finally {
+    globalThis.fetch = realFetch;
+    await app.close();
+  }
+});
+
+test('an HTML block page from the host is never echoed back to the reader', async () => {
+  const app = await createApp();
+  const realFetch = globalThis.fetch;
+  const realWarn = console.warn;
+  const warnings = [];
+  console.warn = (...args) => {
+    warnings.push(args);
+  };
+  globalThis.fetch = async () => new Response('<html><body>Access denied: datacenter IP</body></html>', { status: 403 });
+  try {
+    const res = await uploadImage(app);
+    assert.equal(res.status, 502);
+    const body = await res.json();
+    assert.match(body.error, /HTTP 403/);
+    assert.doesNotMatch(body.error, /html/i);
+    assert.doesNotMatch(body.error, /datacenter/);
+    // …and the markup stays out of the operator log too.
+    assert.doesNotMatch(JSON.stringify(warnings), /<html>/);
+    assert.match(JSON.stringify(warnings), /catbox responded 403/);
+  } finally {
+    globalThis.fetch = realFetch;
+    console.warn = realWarn;
+    await app.close();
+  }
+});
+
+test('upstream rate limiting passes through as a 429 with Retry-After', async () => {
+  const app = await createApp();
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async () =>
+    new Response('Too many requests', { status: 429, headers: { 'retry-after': '45' } });
+  try {
+    const res = await uploadImage(app);
+    assert.equal(res.status, 429);
+    assert.equal(res.headers.get('retry-after'), '45');
+    assert.match((await res.json()).error, /rate-limiting/);
+  } finally {
+    globalThis.fetch = realFetch;
+    await app.close();
+  }
+
+  // Without an upstream hint the route still answers 429 with a sane default.
+  const app2 = await createApp();
+  globalThis.fetch = async () => new Response('Too many requests', { status: 429 });
+  try {
+    const res = await uploadImage(app2);
+    assert.equal(res.status, 429);
+    assert.equal(res.headers.get('retry-after'), '60');
+  } finally {
+    globalThis.fetch = realFetch;
+    await app2.close();
+  }
+});
+
+test('an upstream "too large" passes through as a 413', async () => {
+  const app = await createApp();
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async () => new Response('File too large', { status: 413 });
+  try {
+    const res = await uploadImage(app);
+    assert.equal(res.status, 413);
+    assert.match((await res.json()).error, /too large/);
+  } finally {
+    globalThis.fetch = realFetch;
+    await app.close();
+  }
+});
+
+test('uploads identify themselves to the image host', async () => {
+  const realFetch = globalThis.fetch;
+  try {
+    const catboxApp = await createApp();
+    /** @type {any} */
+    let catboxHeaders = null;
+    globalThis.fetch = async (url, init) => {
+      catboxHeaders = init?.headers;
+      return new Response(CATBOX, { status: 200 });
+    };
+    try {
+      assert.equal((await uploadImage(catboxApp)).status, 201);
+      assert.match(String(catboxHeaders?.['User-Agent'] || ''), /MantisBin/);
+    } finally {
+      await catboxApp.close();
+    }
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
+test('/api/meta names the live upload provider', async () => {
+  const plain = await createApp();
+  try {
+    const meta = await (await plain.request('/api/meta')).json();
+    assert.equal(meta.thumbnail.provider, 'catbox');
+    assert.equal(meta.thumbnail.uploads, true);
+  } finally {
+    await plain.close();
+  }
+  const off = await createApp({ env: { THUMBNAIL_UPLOADS: 'off' } });
+  try {
+    const meta = await (await off.request('/api/meta')).json();
+    assert.equal(meta.thumbnail.provider, null);
+    assert.equal(meta.thumbnail.uploads, false);
+  } finally {
+    await off.close();
   }
 });
 

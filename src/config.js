@@ -48,9 +48,14 @@ export const LIMITS = {
  * a URL — the bytes live on a third-party image host — and the picture is shown
  * on the paste page, in listings and as the `og:image` link preview.
  *
- * Because that host serves the image to anyone who has the link, a thumbnail is
- * PUBLIC even when the paste itself is password-protected or burns after
- * reading. The editor says so, and `views/unlock.js` treats it as public
+ * Uploads always go to catbox.moe (see lib/thumbnail.js). Add a
+ * `CATBOX_USERHASH` in the dashboard so uploads are accepted (and deletable
+ * from that account); with nothing set, uploads are anonymous. You may also
+ * paste any `https:` image URL by hand — a link on any host is accepted.
+ *
+ * Because an image host serves the picture to anyone who has the link, a
+ * thumbnail is PUBLIC even when the paste itself is password-protected or burns
+ * after reading. The editor says so, and `views/unlock.js` treats it as public
  * metadata rather than content.
  */
 export const THUMBNAIL = {
@@ -72,33 +77,30 @@ export const THUMBNAIL = {
 };
 
 /**
- * Image hosts whose URLs may be stored as a thumbnail and rendered in a page.
- *
- * This doubles as the `img-src` allowlist (see lib/http.js): an arbitrary remote
- * `<img>` would let anyone log the IP of everybody who opens a paste, so only
- * these hosts are ever embedded. Operators can add their own with the
- * `THUMBNAIL_HOSTS` variable; an `IMGTREE_BASE_URL` host is added automatically.
+ * A hand-typed thumbnail URL may point at ANY `https:` host — MantisBin does
+ * not restrict which image host you link to. These entries are only the hosts
+ * listed *by default* in the page `img-src` (see lib/http.js) so the built-in
+ * upload target renders without extra configuration; operators can add more
+ * with the `THUMBNAIL_HOSTS` variable. Because arbitrary `https:` image URLs
+ * are allowed, `img-src` is widened to `https:` as well — see lib/http.js.
  */
-export const THUMBNAIL_DEFAULT_HOSTS = ['files.catbox.moe', 'imgtree.co', 'i.imgtree.co'];
+export const THUMBNAIL_DEFAULT_HOSTS = ['files.catbox.moe'];
 
 /**
- * Upload back ends for `POST /p/thumbnail`. Both keep MantisBin free of image
- * storage: the Worker forwards the bytes once and keeps only the returned link.
+ * Upload back end for `POST /p/thumbnail`: catbox.moe only.
  *
- *   imgtree — `POST {IMGTREE_BASE_URL}/api/v1/upload`, `Authorization: Bearer`
- *             with `IMGTREE_API_KEY`. Used automatically when that key exists.
- *   catbox  — `POST https://catbox.moe/user/api.php`, anonymous (or with
- *             `CATBOX_USERHASH`). The fallback when no imgtree key is set.
+ *   catbox — `POST https://catbox.moe/user/api.php`. Add a `CATBOX_USERHASH`
+ *            in the dashboard so uploads are accepted from the Worker's
+ *            datacenter IPs (and deletable from that account); without it,
+ *            uploads are anonymous.
  *
- * With neither configured, uploading is simply off: the editor still accepts a
- * URL that already points at an allowed host, and nothing else changes.
+ * MantisBin never stores image bytes: the Worker forwards them to catbox once
+ * and keeps only the returned link. Set `THUMBNAIL_UPLOADS="off"` to disable
+ * uploading entirely — the editor still accepts a pasted image URL.
  */
 export const THUMBNAIL_PROVIDERS = [
-  { id: 'imgtree', label: 'imgtree', endpoint: '/api/v1/upload' },
   { id: 'catbox', label: 'catbox.moe', endpoint: 'https://catbox.moe/user/api.php' },
 ];
-
-export const IMGTREE_DEFAULT_BASE_URL = 'https://imgtree.co';
 
 /** Expiration presets. `seconds: 0` means "never". */
 export const EXPIRATIONS = [
