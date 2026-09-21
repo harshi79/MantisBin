@@ -14,6 +14,11 @@
  * when it was created, when it expires, whether it expires at all, and the view
  * count (which only ever counts actual, unlocked views).
  *
+ * The optional thumbnail (2.4) is deliberately in the *metadata* half of that
+ * split. It is hosted publicly and readable by anyone who has its URL, so
+ * hiding it here would only mislead — the editor warns the author of exactly
+ * this, and this page repeats it to the reader.
+ *
  * No JavaScript is required to unlock; the form posts and the server sets the
  * HttpOnly unlock cookie.
  */
@@ -31,12 +36,14 @@ import { alertBox, layout } from './layout.js';
  *   locked?: boolean,
  *   burnLabel?: string | null,
  *   next?: string | null,
+ *   thumbnailUrl?: string | null,
  * }} options
  */
 export function unlockPage(options) {
   const { paste } = options;
   const expires = paste.expires_at !== null && paste.expires_at !== undefined;
   const minutes = Math.round(UNLOCK_TTL_SECONDS / 60);
+  const thumbnail = options.thumbnailUrl || null;
 
   const body = html`
     <div class="page-head">
@@ -47,6 +54,16 @@ export function unlockPage(options) {
     </div>
 
     ${alertBox(options.errors)}
+
+    ${thumbnail
+      ? html`<figure class="thumbnail-figure thumbnail-locked">
+          <img class="thumbnail-image" src="${thumbnail}" alt="Thumbnail for this protected paste"
+            width="1200" height="630" loading="lazy" decoding="async" referrerpolicy="no-referrer">
+          <figcaption class="muted small">
+            The author attached this public thumbnail. It is hosted off-site and is not part of the protected content.
+          </figcaption>
+        </figure>`
+      : ''}
 
     <form class="unlock-form" action="/p/${paste.id}/unlock" method="post" autocomplete="off">
       <div>
@@ -96,6 +113,7 @@ export function unlockPage(options) {
     user: options.user,
     noindex: true,
     path: options.path,
+    image: thumbnail,
     body,
   });
 }

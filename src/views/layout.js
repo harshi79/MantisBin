@@ -13,10 +13,11 @@ import { html } from '../lib/html.js';
  *   noindex?: boolean,
  *   active?: string,
  *   path?: string,
+ *   image?: string | null,
  *   body: import('../lib/html.js').SafeHtml,
  * }} options
  */
-export function layout({ title, description, theme = 'auto', user = null, noindex = false, active = '', path = '/', body }) {
+export function layout({ title, description, theme = 'auto', user = null, noindex = false, active = '', path = '/', image = null, body }) {
   const nextTheme = theme === 'light' ? 'dark' : theme === 'dark' ? 'ocean' : theme === 'ocean' ? 'auto' : 'light';
   const nextLabel = nextTheme === 'auto' ? 'Auto' : nextTheme === 'light' ? 'Light' : nextTheme === 'dark' ? 'Dark' : 'Ocean';
   return html`<!doctype html>
@@ -34,6 +35,11 @@ ${noindex ? html`<meta name="robots" content="noindex, nofollow">` : ''}
 <link rel="stylesheet" href="/app.css">
 <meta property="og:site_name" content="${SITE.name}">
 <meta property="og:title" content="${title}">
+${image
+  ? html`<meta property="og:image" content="${image}">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:image" content="${image}">`
+  : ''}
 </head>
 <body>
 <a class="skip-link" href="#main">Skip to content</a>

@@ -16,6 +16,7 @@ function languageLabel(id) {
  *   theme: string, user: any, path: string,
  *   paste: any,
  *   contentHtml: string,
+ *   thumbnailUrl?: string | null,
  *   highlighted: boolean,
  *   lineNumbers?: boolean,
  *   share?: boolean,
@@ -26,6 +27,7 @@ function languageLabel(id) {
  */
 export function pastePage(options) {
   const { paste } = options;
+  const thumbnail = options.thumbnailUrl || null;
   const lines = String(paste.content ?? '').split('\n').length;
   const expired = paste.expires_at !== null && paste.expires_at !== undefined;
   const ext = filenameExtension(paste.title);
@@ -69,6 +71,13 @@ export function pastePage(options) {
       ${paste.password_hash ? html`<span class="badge">password-protected</span>` : ''}
       ${burnLabel(paste) ? html`<span class="badge badge-warn">${burnLabel(paste)}</span>` : ''}
     </div>
+    ${thumbnail
+      ? html`<figure class="thumbnail-figure">
+          <img class="thumbnail-image" src="${thumbnail}" alt="Thumbnail for ${paste.title}"
+            width="1200" height="630" loading="lazy" decoding="async" referrerpolicy="no-referrer">
+          <figcaption class="muted small">Thumbnail — hosted publicly, visible to anyone with the link.</figcaption>
+        </figure>`
+      : ''}
     ${options.share
       ? html`<div class="alert alert-ok share-notice" role="status">
           <b>Your paste is ready.</b>
@@ -104,6 +113,7 @@ export function pastePage(options) {
     user: options.user,
     noindex: true,
     path: options.path,
+    image: thumbnail,
     body,
   });
 }

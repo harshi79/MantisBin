@@ -29,6 +29,7 @@ import {
   LIMITS,
   RATE_LIMITS,
   SITE,
+  THUMBNAIL,
   UNLOCK_MAX_TOKENS,
   UNLOCK_TTL_SECONDS,
   VISIBILITY,
@@ -63,6 +64,7 @@ import {
   validateTitle,
 } from '../lib/validate.js';
 import { createPaste, deletePaste, getPaste, listUserPastes, updatePaste } from '../lib/pastes.js';
+import { allowedThumbnailHosts, safeThumbnailUrl, uploadsEnabled, validateThumbnailUrl } from '../lib/thumbnail.js';
 import { maxBytesFor } from './web.js';
 
 /** @typedef {import('../app.js').Ctx} Ctx */
@@ -75,7 +77,7 @@ function iso(seconds) {
 /**
  * @param {any} paste
  * @param {string} origin
- * @param {{ content?: boolean }} [options]
+ * @param {{ content?: boolean, env?: any }} [options]
  */
 export function serializePaste(paste, origin, options = {}) {
   const base = {
@@ -97,6 +99,11 @@ export function serializePaste(paste, origin, options = {}) {
     visibility: paste.visibility ?? DEFAULT_VISIBILITY,
     /** 'never' | 'view' | 'read' — a one-time paste is deleted as it is served. */
     burnAfter: burnModeOf(paste),
+    /**
+     * Public image URL, or null. Always readable — it is hosted off-site — so
+     * it is returned even for a protected paste's owner-side listings.
+     */
+    thumbnailUrl: safeThumbnailUrl(paste.thumbnail_url, options.env),
   };
   if (options.content) base.content = paste.content;
   return base;
@@ -178,6 +185,20 @@ export async function meta(ctx) {
     },
     burnModes: BURN_MODES.map((mode) => ({ id: mode.id, label: mode.label })),
     defaultBurnMode: DEFAULT_BURN_MODE,
+    thumbnail: {
+      /** Card box the browser-side resize fits into before uploading. */
+      width: THUMBNAIL.width,
+      height: THUMBNAIL.height,
+      maxBytes: THUMBNAIL.maxBytes,
+      maxUrlLength: THUMBNAIL.maxUrlLength,
+      types: THUMBNAIL.types,
+      /** Only these hosts may be stored or embedded. */
+      allowedHosts: allowedThumbnailHosts(ctx.env),
+      /** Whether `POST /p/thumbnail` can forward image bytes on this instance. */
+      uploads: uploadsEnabled(ctx.env),
+      /** A thumbnail is public even on a protected or one-time paste. */
+      public: true,
+    },
     unlock: {
       seconds: UNLOCK_TTL_SECONDS,
       maxRemembered: UNLOCK_MAX_TOKENS,
@@ -217,6 +238,9 @@ export async function create(ctx) {
   const language = resolvePasteLanguage(languageChoice, title.value, content.value, content.bytes);
   const visibility = resolveVisibility(body.visibility, true);
   if (!visibility.ok) throw new HttpError(400, visibility.error);
+  // A thumbnail is a URL on an allowed host — the API never accepts image bytes.
+  const thumbnail = validateThumbnailUrl(body.thumbnailUrl ?? body.thumbnail_url, ctx.env);
+  if (!thumbnail.ok) throw new HttpError(400, thumbnail.error);
   const paste = await createPaste(ctx.db, {
     title: title.value,
     content: content.value,
@@ -228,10 +252,11 @@ export async function create(ctx) {
     passwordHash,
     burnMode: burnAfter.value,
     visibility: visibility.value,
+    thumbnailUrl: thumbnail.value,
     now: ctx.now,
   });
 
-  return jsonResponse(serializePaste(paste, ctx.url.origin, { content: false }), 201);
+  return jsonResponse(serializePaste(paste, ctx.url.origin, { content: false, env: ctx.env }), 201);
 }
 
 /** GET /api/pastes/mine */
@@ -239,7 +264,7 @@ export async function mine(ctx) {
   const auth = await requireKey(ctx);
   const pastes = await listUserPastes(ctx.db, auth.user.id, 200, ctx.now);
   return jsonResponse({
-    pastes: pastes.map((paste) => serializePaste(paste, ctx.url.origin)),
+    pastes: pastes.map((paste) => serializePaste(paste, ctx.url.origin, { env: ctx.env })),
   });
 }
 
@@ -312,6 +337,13 @@ export async function fork(ctx, params) {
   // only a signed-in actor may publish at all.
   const copyVisibility = resolveVisibility(overrides.visibility, !!auth);
   if (!copyVisibility.ok) throw new HttpError(400, copyVisibility.error);
+  // The thumbnail is a public URL, so a copy may reuse it. An explicit
+  // `thumbnailUrl` (including `null`) overrides; absent keeps the source's.
+  const copyThumbnail =
+    overrides.thumbnailUrl === undefined && overrides.thumbnail_url === undefined
+      ? { ok: true, value: safeThumbnailUrl(source.thumbnail_url, ctx.env) || '' }
+      : validateThumbnailUrl(overrides.thumbnailUrl ?? overrides.thumbnail_url, ctx.env);
+  if (!copyThumbnail.ok) throw new HttpError(400, copyThumbnail.error);
   const copy = await createPaste(ctx.db, {
     title: title.value,
     content: content.value,
@@ -323,10 +355,11 @@ export async function fork(ctx, params) {
     passwordHash,
     burnMode: burnAfter.value,
     visibility: copyVisibility.value,
+    thumbnailUrl: copyThumbnail.value,
     now: ctx.now,
   });
 
-  return jsonResponse(serializePaste(copy, ctx.url.origin), 201, {}, { noindex: true });
+  return jsonResponse(serializePaste(copy, ctx.url.origin, { env: ctx.env }), 201, {}, { noindex: true });
 }
 
 /** GET /api/pastes/:id */
@@ -342,7 +375,7 @@ export async function get(ctx, params) {
   if (!(await canReadPaste(ctx, paste)) && !(await apiKeyOwnsPaste(ctx, paste))) throw protectedError();
   // Burn-after-reading in `read` mode: a JSON read consumes the paste too.
   if (!(await claimBurnForRead(ctx.db, paste, 'read'))) throw burnedAway();
-  return jsonResponse(serializePaste(paste, ctx.url.origin, { content: true }), 200, {}, { noindex: true });
+  return jsonResponse(serializePaste(paste, ctx.url.origin, { content: true, env: ctx.env }), 200, {}, { noindex: true });
 }
 
 /** 404 for a one-time paste that another concurrent read already consumed. */
@@ -465,6 +498,11 @@ export async function update(ctx, params) {
   const language = resolvePasteLanguage(languageChoice, title.value, content.value, content.bytes);
   const visibility = body.visibility === undefined ? { ok: true, value: existing.visibility } : resolveVisibility(body.visibility, true);
   if (!visibility.ok) throw new HttpError(400, visibility.error);
+  // Key presence: `thumbnailUrl: null` removes it, a string replaces it, an
+  // absent field keeps whatever the paste already has.
+  const thumbnailKey = Object.hasOwn(body, 'thumbnailUrl') ? 'thumbnailUrl' : Object.hasOwn(body, 'thumbnail_url') ? 'thumbnail_url' : null;
+  const thumbnail = thumbnailKey ? validateThumbnailUrl(body[thumbnailKey], ctx.env) : { ok: true, value: undefined };
+  if (!thumbnail.ok) throw new HttpError(400, thumbnail.error);
   const result = await updatePaste(
     ctx.db,
     params.id,
@@ -479,13 +517,14 @@ export async function update(ctx, params) {
       passwordHash,
       burnMode: burnAfter.value,
       visibility: visibility.value,
+      thumbnailUrl: thumbnail.value,
     },
     ctx.now,
   );
   if (!result.ok) throw new HttpError(result.reason === 'missing' ? 404 : 403);
 
   const updated = await getPaste(ctx.db, params.id, { content: true, now: ctx.now });
-  return jsonResponse(serializePaste(updated, ctx.url.origin, { content: false }));
+  return jsonResponse(serializePaste(updated, ctx.url.origin, { content: false, env: ctx.env }));
 }
 
 /** DELETE /api/pastes/:id */

@@ -44,6 +44,7 @@ import { consume } from '../lib/ratelimit.js';
 import { listPublicPastes, userStats } from '../lib/pastes.js';
 import { validateUsername } from '../lib/validate.js';
 import { serializePaste } from './api.js';
+import { withThumbnails } from './web.js';
 import { goodbyePage, settingsPage } from '../views/settings.js';
 import { profilePage } from '../views/profile.js';
 
@@ -175,7 +176,7 @@ export async function publicProfile(ctx, params) {
   const body = profilePage({
     ...pageCtx(ctx),
     account: { username: account.username, created_at: account.created_at },
-    pastes,
+    pastes: withThumbnails(pastes, ctx.env),
     stats,
     isOwner,
   });
@@ -201,6 +202,6 @@ export async function apiProfile(ctx, params) {
   return jsonResponse({
     username: account.username,
     createdAt: new Date(Number(account.created_at) * 1000).toISOString(),
-    pastes: pastes.map((paste) => serializePaste(paste, ctx.url.origin)),
+    pastes: pastes.map((paste) => serializePaste(paste, ctx.url.origin, { env: ctx.env })),
   });
 }

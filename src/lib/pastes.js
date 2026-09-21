@@ -13,7 +13,7 @@ import { byteLength } from './validate.js';
  * `content` is deliberately excluded from list queries — pastes can be 10 MB.
  */
 export const PASTE_META_COLUMNS =
-  'id, title, language, font, font_size, size, views, user_id, created_at, updated_at, expires_at, password_hash, burn_mode, burned, visibility';
+  'id, title, language, font, font_size, size, views, user_id, created_at, updated_at, expires_at, password_hash, burn_mode, burned, visibility, thumbnail_url';
 
 /**
  * @typedef {object} Paste
@@ -33,6 +33,7 @@ export const PASTE_META_COLUMNS =
  * @property {string} [burn_mode] 'never' | 'view' | 'read'
  * @property {number} [burned] 1 once a one-time paste has been handed out
  * @property {string} [visibility] 'unlisted' | 'public'
+ * @property {string | null} [thumbnail_url] public image URL, or null
  */
 
 /**
@@ -40,7 +41,8 @@ export const PASTE_META_COLUMNS =
  * @param {{
  *   title: string, content: string, language: string, font: string,
  *   fontSize: number, expiresAt: number | null, userId?: number | null,
- *   passwordHash?: string | null, burnMode?: string, visibility?: string, now?: number
+ *   passwordHash?: string | null, burnMode?: string, visibility?: string,
+ *   thumbnailUrl?: string | null, now?: number
  * }} input
  * @returns {Promise<Paste>}
  */
@@ -54,8 +56,8 @@ export async function createPaste(db, input) {
     try {
       await db.run(
         `INSERT INTO pastes
-           (id, title, content, language, font, font_size, size, views, user_id, created_at, updated_at, expires_at, password_hash, burn_mode, burned, visibility)
-         VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, 0, ?)`,
+           (id, title, content, language, font, font_size, size, views, user_id, created_at, updated_at, expires_at, password_hash, burn_mode, burned, visibility, thumbnail_url)
+         VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, 0, ?, ?)`,
         [
           id,
           input.title,
@@ -71,6 +73,7 @@ export async function createPaste(db, input) {
           input.passwordHash ?? null,
           input.burnMode ?? DEFAULT_BURN_MODE,
           input.visibility ?? DEFAULT_VISIBILITY,
+          input.thumbnailUrl || null,
         ],
       );
       return {
@@ -90,6 +93,7 @@ export async function createPaste(db, input) {
         burn_mode: input.burnMode ?? DEFAULT_BURN_MODE,
         burned: 0,
         visibility: input.visibility ?? DEFAULT_VISIBILITY,
+        thumbnail_url: input.thumbnailUrl || null,
       };
     } catch (error) {
       if (!isUniqueViolation(error) || attempt === 3) throw error;
@@ -133,8 +137,9 @@ export async function getPaste(db, id, options = {}) {
  *
  * `fields.passwordHash` is tri-state: `undefined` keeps the stored hash,
  * `null` removes the protection, a string replaces it. `fields.burnMode` is
- * optional the same way (`undefined` keeps the current mode). Visibility
- * follows the same rule: `undefined` keeps it, otherwise it is replaced.
+ * optional the same way (`undefined` keeps the current mode). Visibility and
+ * `thumbnailUrl` follow the same rule: `undefined` keeps the stored value,
+ * `null`/`''` clears it, a string replaces it.
  * @param {Db} db
  */
 export async function updatePaste(db, id, userId, fields, now = Math.floor(Date.now() / 1000)) {
@@ -174,6 +179,10 @@ export async function updatePaste(db, id, userId, fields, now = Math.floor(Date.
   if (fields.visibility !== undefined) {
     assignments.push('visibility = ?');
     params.push(fields.visibility);
+  }
+  if (fields.thumbnailUrl !== undefined) {
+    assignments.push('thumbnail_url = ?');
+    params.push(fields.thumbnailUrl || null);
   }
   params.push(id, userId);
 

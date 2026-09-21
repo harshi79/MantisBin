@@ -2,7 +2,7 @@
  * One filename-first workspace for creating, editing and duplicating pastes.
  * Every control is an ordinary form input; JavaScript only enhances the editor.
  */
-import { BURN_MODES, DEFAULT_FILENAME, DEFAULT_VISIBILITY, EXPIRATIONS, FILENAME_EXTENSIONS, FONTS, FONT_SIZES, LANGUAGES, LANGUAGE_OPTIONS, LIMITS, SITE, UNLOCK_TTL_SECONDS, VISIBILITY } from '../config.js';
+import { BURN_MODES, DEFAULT_FILENAME, DEFAULT_VISIBILITY, EXPIRATIONS, FILENAME_EXTENSIONS, FONTS, FONT_SIZES, LANGUAGES, LANGUAGE_OPTIONS, LIMITS, SITE, THUMBNAIL, UNLOCK_TTL_SECONDS, VISIBILITY } from '../config.js';
 import { icon } from '../assets/icons.js';
 import { html } from '../lib/html.js';
 import { formatBytes } from '../lib/validate.js';
@@ -25,15 +25,22 @@ function extensionHintPayload() {
  *   mode: 'create' | 'edit' | 'fork',
  *   pasteId?: string,
  *   values: { title: string, content: string, language: string, font: string, font_size: number, expiration: string,
- *             burn_after?: string, protected?: boolean, visibility?: string },
+ *             burn_after?: string, protected?: boolean, visibility?: string, thumbnail_url?: string,
+ *             thumbnail_remove?: boolean, had_thumbnail?: boolean },
  *   errors?: string[], okMessage?: string,
  *   maxBytes: number,
+ *   uploads?: boolean,
  * }} options
  */
 export function editorPage(options) {
   const { values, mode } = options;
   const isEdit = mode === 'edit';
   const isFork = mode === 'fork';
+  const thumbnail = values.thumbnail_url || '';
+  // The removal checkbox stays available (and checked) after a failed submit,
+  // so a validation error elsewhere in the form never silently drops the
+  // author's decision to take the picture down.
+  const canRemoveThumbnail = isEdit && (Boolean(thumbnail) || Boolean(values.had_thumbnail) || Boolean(values.thumbnail_remove));
   const action = isEdit ? `/p/${options.pasteId}/edit` : '/p';
   const heading = isEdit ? 'Edit paste' : isFork ? 'Duplicate paste' : 'New paste';
   const tagline = isEdit
@@ -141,6 +148,41 @@ export function editorPage(options) {
             <p id="password-help" class="field-note">${isEdit ? 'Leave empty to keep current protection. ' : ''}${LIMITS.passphraseMin}+ characters. Unlocks for ${Math.round(UNLOCK_TTL_SECONDS / 60)} minutes.</p>
             ${isEdit && values.protected
               ? html`<label class="check"><input type="checkbox" name="remove_password" value="1"><span>Remove the current password</span></label>`
+              : ''}
+          </div>
+          <div class="field thumbnail-field" data-thumbnail-field data-max-width="${THUMBNAIL.width}"
+            data-max-height="${THUMBNAIL.height}" data-quality="${THUMBNAIL.quality}" data-max-bytes="${THUMBNAIL.maxBytes}"
+            ${options.uploads ? html`data-uploads="1"` : ''}>
+            <label for="thumbnail_url">${icon('image')} Thumbnail <span class="label-optional">optional</span></label>
+            <div class="thumbnail-preview" data-thumbnail-preview ${thumbnail ? '' : html`hidden`}>
+              ${thumbnail
+                ? html`<img src="${thumbnail}" alt="Current thumbnail" width="${THUMBNAIL.width}" height="${THUMBNAIL.height}" loading="lazy" data-thumbnail-image>`
+                : html`<img alt="Thumbnail preview" width="${THUMBNAIL.width}" height="${THUMBNAIL.height}" loading="lazy" data-thumbnail-image>`}
+            </div>
+            ${options.uploads
+              ? html`<div class="thumbnail-actions">
+                  <label class="btn btn-sm thumbnail-pick">
+                    ${icon('image')}<span>Choose image</span>
+                    <input type="file" accept="${THUMBNAIL.types.join(',')}" data-thumbnail-input class="sr-only">
+                  </label>
+                  <button class="btn btn-sm btn-ghost" type="button" data-thumbnail-clear ${thumbnail ? '' : html`hidden`}>Remove</button>
+                  <span class="thumbnail-status muted small" data-thumbnail-status role="status"></span>
+                </div>`
+              : ''}
+            <input id="thumbnail_url" name="thumbnail_url" type="url" value="${thumbnail}"
+              maxlength="${THUMBNAIL.maxUrlLength}" autocomplete="off" spellcheck="false"
+              placeholder="https://files.catbox.moe/example.jpg" aria-describedby="thumbnail-help"
+              data-thumbnail-url>
+            <p id="thumbnail-help" class="field-note">
+              <b>Anyone with the link can see the thumbnail</b> — it is stored on a public image host, so it stays
+              visible even on a password-protected or one-time paste, and it remains on that host after this paste
+              expires or is deleted. Never put anything private in it.
+              ${options.uploads
+                ? html`Images are resized to ${THUMBNAIL.width}×${THUMBNAIL.height} in your browser before upload; MantisBin stores only the link.`
+                : html`Paste a link to an image on an allowed host.`}
+            </p>
+            ${canRemoveThumbnail
+              ? html`<label class="check"><input type="checkbox" name="remove_thumbnail" value="1" data-thumbnail-remove ${values.thumbnail_remove ? html`checked` : ''}><span>Remove the current thumbnail</span></label>`
               : ''}
           </div>
           ${options.user

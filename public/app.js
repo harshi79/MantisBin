@@ -268,6 +268,157 @@
     updateLangHint();
   }
 
+  /* ---- thumbnail: resize in the browser, upload, keep only the URL ------- */
+
+  // Progressive enhancement. Without JS the field is an ordinary URL input and
+  // the paste form still posts normally; with JS, picking a file resizes it to
+  // fit the card box, POSTs it to /p/thumbnail and fills the URL in.
+  //
+  // The resize happens here, before anything leaves the browser, so the image
+  // host only ever receives a small card — never the original photo with its
+  // full resolution (and whatever EXIF a canvas re-encode drops on the way).
+  var thumbField = doc.querySelector('[data-thumbnail-field]');
+  if (thumbField && thumbField.getAttribute('data-uploads') === '1') {
+    var thumbInput = thumbField.querySelector('[data-thumbnail-input]');
+    var thumbUrl = thumbField.querySelector('[data-thumbnail-url]');
+    var thumbStatus = thumbField.querySelector('[data-thumbnail-status]');
+    var thumbPreview = thumbField.querySelector('[data-thumbnail-preview]');
+    var thumbImage = thumbField.querySelector('[data-thumbnail-image]');
+    var thumbClear = thumbField.querySelector('[data-thumbnail-clear]');
+    var thumbRemove = thumbField.querySelector('[data-thumbnail-remove]');
+    var boxWidth = Number(thumbField.getAttribute('data-max-width')) || 1200;
+    var boxHeight = Number(thumbField.getAttribute('data-max-height')) || 630;
+    var quality = Number(thumbField.getAttribute('data-quality')) || 0.82;
+    var maxBytes = Number(thumbField.getAttribute('data-max-bytes')) || 2097152;
+
+    function thumbSay(message) {
+      if (thumbStatus) thumbStatus.textContent = message || '';
+    }
+
+    function showThumb(url) {
+      if (thumbImage) thumbImage.src = url;
+      if (thumbPreview) thumbPreview.hidden = !url;
+      if (thumbClear) thumbClear.hidden = !url;
+    }
+
+    if (thumbUrl) {
+      thumbUrl.addEventListener('input', function () {
+        var value = thumbUrl.value.trim();
+        if (/^https:\/\//i.test(value)) showThumb(value);
+        else showThumb('');
+        // Typing a new URL countermands an earlier "remove this thumbnail".
+        if (thumbRemove && value) thumbRemove.checked = false;
+      });
+    }
+
+    if (thumbClear) {
+      thumbClear.addEventListener('click', function () {
+        if (thumbUrl) thumbUrl.value = '';
+        if (thumbInput) thumbInput.value = '';
+        // On the edit form the checkbox is what actually clears a stored
+        // thumbnail server-side; an empty URL input alone means "keep".
+        if (thumbRemove) thumbRemove.checked = true;
+        showThumb('');
+        thumbSay('Thumbnail removed.');
+      });
+    }
+
+    // Fit inside the card box without upscaling or cropping.
+    function fitTo(width, height) {
+      var scale = Math.min(boxWidth / width, boxHeight / height, 1);
+      return { width: Math.max(1, Math.round(width * scale)), height: Math.max(1, Math.round(height * scale)) };
+    }
+
+    function drawToBlob(source, width, height) {
+      var size = fitTo(width, height);
+      var canvas = doc.createElement('canvas');
+      canvas.width = size.width;
+      canvas.height = size.height;
+      var context = canvas.getContext('2d');
+      if (!context) return Promise.reject(new Error('no canvas'));
+      context.drawImage(source, 0, 0, size.width, size.height);
+      return new Promise(function (resolve, reject) {
+        canvas.toBlob(function (blob) {
+          if (blob) resolve(blob);
+          else reject(new Error('encode failed'));
+        }, 'image/jpeg', quality);
+      });
+    }
+
+    function resizeFile(file) {
+      // An animated GIF loses its animation in a canvas, so send it untouched
+      // when it is already small enough; otherwise a still frame beats nothing.
+      if (file.type === 'image/gif' && file.size <= maxBytes) return Promise.resolve(file);
+      if (typeof createImageBitmap === 'function') {
+        return createImageBitmap(file).then(function (bitmap) {
+          return drawToBlob(bitmap, bitmap.width, bitmap.height).then(function (blob) {
+            if (bitmap.close) bitmap.close();
+            return blob;
+          });
+        });
+      }
+      return new Promise(function (resolve, reject) {
+        var url = URL.createObjectURL(file);
+        var image = new Image();
+        image.onload = function () {
+          drawToBlob(image, image.naturalWidth, image.naturalHeight).then(
+            function (blob) { URL.revokeObjectURL(url); resolve(blob); },
+            function (error) { URL.revokeObjectURL(url); reject(error); },
+          );
+        };
+        image.onerror = function () {
+          URL.revokeObjectURL(url);
+          reject(new Error('That file could not be read as an image.'));
+        };
+        image.src = url;
+      });
+    }
+
+    if (thumbInput) {
+      thumbInput.addEventListener('change', function () {
+        var file = thumbInput.files && thumbInput.files[0];
+        if (!file) return;
+        thumbSay('Resizing…');
+        resizeFile(file).then(
+          function (blob) {
+            if (blob.size > maxBytes) {
+              thumbSay('That image is still too large after resizing.');
+              return;
+            }
+            thumbSay('Uploading…');
+            var body = new FormData();
+            body.append('image', blob, 'thumbnail.jpg');
+            return fetch('/p/thumbnail', { method: 'POST', body: body, credentials: 'same-origin' }).then(
+              function (response) {
+                return response.json().then(
+                  function (data) {
+                    if (!response.ok || !data.url) {
+                      thumbSay(data.error || 'Upload failed. Paste an image URL instead.');
+                      return;
+                    }
+                    if (thumbUrl) thumbUrl.value = data.url;
+                    if (thumbRemove) thumbRemove.checked = false;
+                    showThumb(data.url);
+                    thumbSay('Uploaded. The link is saved with the paste.');
+                  },
+                  function () {
+                    thumbSay('Upload failed. Paste an image URL instead.');
+                  },
+                );
+              },
+              function () {
+                thumbSay('Upload failed. Check your connection, or paste an image URL.');
+              },
+            );
+          },
+          function (error) {
+            thumbSay((error && error.message) || 'That image could not be processed.');
+          },
+        );
+      });
+    }
+  }
+
   /* ---- local draft recovery --------------------------------------------- */
 
   var DRAFT_KEY = 'mantisbin:draft:v1';
