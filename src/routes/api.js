@@ -64,7 +64,7 @@ import {
   validateTitle,
 } from '../lib/validate.js';
 import { createPaste, deletePaste, getPaste, listUserPastes, updatePaste } from '../lib/pastes.js';
-import { allowedThumbnailHosts, safeThumbnailUrl, uploadsEnabled, validateThumbnailUrl } from '../lib/thumbnail.js';
+import { allowedThumbnailHosts, safeThumbnailUrl, uploadProvider, uploadsEnabled, validateThumbnailUrl } from '../lib/thumbnail.js';
 import { maxBytesFor } from './web.js';
 
 /** @typedef {import('../app.js').Ctx} Ctx */
@@ -196,6 +196,8 @@ export async function meta(ctx) {
       allowedHosts: allowedThumbnailHosts(ctx.env),
       /** Whether `POST /p/thumbnail` can forward image bytes on this instance. */
       uploads: uploadsEnabled(ctx.env),
+      /** Which back end `POST /p/thumbnail` forwards to (`imgtree`, `catbox`, or null when off). */
+      provider: uploadProvider(ctx.env),
       /** A thumbnail is public even on a protected or one-time paste. */
       public: true,
     },

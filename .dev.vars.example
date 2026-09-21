@@ -18,7 +18,9 @@ APP_SECRET="change-me-to-a-long-random-string"
 # on a password-protected or burn-after-reading paste — so the editor warns
 # authors not to put anything private in one.
 #
-# With nothing set below, uploads go to catbox.moe anonymously.
+# With nothing set below, uploads go to catbox.moe anonymously. Production
+# note: catbox filters datacenter IPs (Workers egress), so a deployed Worker
+# that must reliably upload should use imgtree instead — see DEPLOY-THUMBNAILS.md.
 #
 # imgtree (https://imgtree.co/api-docs) — set a key to use it instead of catbox.
 #   wrangler secret put IMGTREE_API_KEY
