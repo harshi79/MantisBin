@@ -28,6 +28,11 @@ export function myPastesPage(options) {
     ? html`<div class="list">
         ${pastes.map(
           (paste) => html`<div class="list-item">
+            ${paste.thumbnail
+              ? html`<a class="list-thumb" href="/p/${paste.id}" tabindex="-1" aria-hidden="true">
+                  <img src="${paste.thumbnail}" alt="" width="80" height="42" loading="lazy" decoding="async" referrerpolicy="no-referrer">
+                </a>`
+              : ''}
             <div class="list-main">
               <a class="list-title" href="/p/${paste.id}">${paste.title}</a>
               <div class="list-sub">
@@ -36,6 +41,7 @@ export function myPastesPage(options) {
                 <span title="${formatDateTime(paste.created_at)}">${relativeTime(paste.created_at)}</span>
                 <span>${paste.views} ${paste.views === 1 ? 'view' : 'views'}</span>
                 ${paste.visibility === 'public' ? html`<span class="badge badge-ok">public</span>` : ''}
+                ${paste.thumbnail ? html`<span class="badge">thumbnail</span>` : ''}
                 ${paste.password_hash ? html`<span class="badge">password-protected</span>` : ''}
                 ${burnLabel(paste) ? html`<span class="badge badge-warn">${burnLabel(paste)}</span>` : ''}
                 ${

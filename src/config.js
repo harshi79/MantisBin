@@ -41,6 +41,65 @@ export const LIMITS = {
   idLength: 8,
 };
 
+/**
+ * Optional paste thumbnails (2.4).
+ *
+ * A thumbnail is one small image attached to a paste. The database stores only
+ * a URL — the bytes live on a third-party image host — and the picture is shown
+ * on the paste page, in listings and as the `og:image` link preview.
+ *
+ * Because that host serves the image to anyone who has the link, a thumbnail is
+ * PUBLIC even when the paste itself is password-protected or burns after
+ * reading. The editor says so, and `views/unlock.js` treats it as public
+ * metadata rather than content.
+ */
+export const THUMBNAIL = {
+  /** Target card box — the 1.91:1 frame link previews crop to. Contain, never upscale. */
+  width: 1200,
+  height: 630,
+  /** JPEG quality used by the in-browser resize before anything is uploaded. */
+  quality: 0.82,
+  /** Hard ceiling for one uploaded image *after* the client-side resize. */
+  maxBytes: 2 * 1024 * 1024,
+  /** Reject either side above this: a resized card is 1200×630, this is slack. */
+  maxDimension: 4096,
+  /** Stored URL length cap (the column is a URL, never a data: payload). */
+  maxUrlLength: 500,
+  /** MIME types the upload endpoint accepts, and the extensions they imply. */
+  types: ['image/jpeg', 'image/png', 'image/webp', 'image/gif'],
+  /** Output of the browser-side resize. */
+  outputType: 'image/jpeg',
+};
+
+/**
+ * Image hosts whose URLs may be stored as a thumbnail and rendered in a page.
+ *
+ * This doubles as the `img-src` allowlist (see lib/http.js): an arbitrary remote
+ * `<img>` would let anyone log the IP of everybody who opens a paste, so only
+ * these hosts are ever embedded. Operators can add their own with the
+ * `THUMBNAIL_HOSTS` variable; an `IMGTREE_BASE_URL` host is added automatically.
+ */
+export const THUMBNAIL_DEFAULT_HOSTS = ['files.catbox.moe', 'imgtree.co', 'i.imgtree.co'];
+
+/**
+ * Upload back ends for `POST /p/thumbnail`. Both keep MantisBin free of image
+ * storage: the Worker forwards the bytes once and keeps only the returned link.
+ *
+ *   imgtree — `POST {IMGTREE_BASE_URL}/api/v1/upload`, `Authorization: Bearer`
+ *             with `IMGTREE_API_KEY`. Used automatically when that key exists.
+ *   catbox  — `POST https://catbox.moe/user/api.php`, anonymous (or with
+ *             `CATBOX_USERHASH`). The fallback when no imgtree key is set.
+ *
+ * With neither configured, uploading is simply off: the editor still accepts a
+ * URL that already points at an allowed host, and nothing else changes.
+ */
+export const THUMBNAIL_PROVIDERS = [
+  { id: 'imgtree', label: 'imgtree', endpoint: '/api/v1/upload' },
+  { id: 'catbox', label: 'catbox.moe', endpoint: 'https://catbox.moe/user/api.php' },
+];
+
+export const IMGTREE_DEFAULT_BASE_URL = 'https://imgtree.co';
+
 /** Expiration presets. `seconds: 0` means "never". */
 export const EXPIRATIONS = [
   { id: '10m', label: '10 minutes', seconds: 600 },
@@ -264,6 +323,12 @@ export const RATE_LIMITS = {
    * carries both, so hammering one paste cannot lock a visitor out of another.
    */
   unlock: { limit: 10, window: 900 },
+  /**
+   * Thumbnail uploads (per IP, or per user when signed in). Tighter than paste
+   * creation: every one of these spends an outbound request to a third-party
+   * image host that MantisBin does not pay for or control.
+   */
+  thumbnail: { limit: 20, window: 3600 },
 };
 
 /** Sessions last 30 days and slide forward on activity. */

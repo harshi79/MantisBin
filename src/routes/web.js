@@ -27,7 +27,7 @@ import {
   revokeApiKey,
   sessionCookie,
 } from '../lib/auth.js';
-import { HttpError, headers, htmlResponse, parseForm, readBody, redirect, safeRedirectTarget, svgResponse, textResponse } from '../lib/http.js';
+import { HttpError, headers, htmlResponse, jsonResponse, parseForm, readBody, redirect, safeRedirectTarget, svgResponse, textResponse } from '../lib/http.js';
 import { appSecret, canReadPaste, isPasteOwner } from '../lib/access.js';
 import { burnLabel, burnModeOf, claimBurnForRead } from '../lib/burn.js';
 import {
@@ -39,8 +39,17 @@ import {
   verifyPassphrase,
 } from '../lib/unlock.js';
 import { addLineAnchors, renderCode } from '../lib/highlight.js';
+import {
+  allowedThumbnailHosts,
+  safeThumbnailUrl,
+  uploadThumbnail,
+  uploadsEnabled,
+  validateThumbnailUrl,
+  validateUpload,
+} from '../lib/thumbnail.js';
 import { canonicalPasteUrl, normalizeLineAnchor, qrSvg } from '../lib/qr.js';
 import { faviconSvg, logoSvg, markSvg } from '../assets/mark.js';
+import { THUMBNAIL } from '../config.js';
 import {
   cleanText,
   downloadFilename,
@@ -89,6 +98,17 @@ function pageCtx(ctx) {
 }
 
 /**
+ * Attach a render-safe `thumbnail` to list rows. Re-validating here means an
+ * operator who removes a host from the allowlist immediately stops every page
+ * from embedding images from it, without touching stored rows.
+ * @param {any[]} pastes
+ * @param {any} env
+ */
+export function withThumbnails(pastes, env) {
+  return pastes.map((paste) => ({ ...paste, thumbnail: safeThumbnailUrl(paste.thumbnail_url, env) }));
+}
+
+/**
  * Optional passphrase field. Three intents share one input:
  *   create + empty            -> no protection
  *   edit + empty              -> keep the stored hash untouched
@@ -123,12 +143,38 @@ async function resolvePassphraseHash(state) {
 }
 
 /**
+ * Optional thumbnail field. The editor posts an already-uploaded URL in
+ * `thumbnail_url` (JS fills it after `POST /p/thumbnail`, or the reader pastes
+ * a link by hand), plus a `remove_thumbnail` checkbox when editing.
+ *
+ *   create + empty            -> no thumbnail
+ *   edit   + empty            -> keep the stored URL untouched
+ *   edit   + "remove" checked -> clear it
+ *   anything else             -> set (validated against the host allowlist)
+ *
+ * @param {Record<string, string>} form
+ * @param {'create' | 'edit'} mode
+ * @param {any} env
+ */
+function readThumbnail(form, mode, env) {
+  const raw = typeof form.thumbnail_url === 'string' ? form.thumbnail_url.trim() : '';
+  if (mode === 'edit' && form.remove_thumbnail === '1') return { value: null, url: '', remove: true };
+  if (raw === '') return { value: mode === 'edit' ? undefined : null, url: '' };
+  const check = validateThumbnailUrl(raw, env);
+  // On error the submitted URL is echoed back so the reader can fix a typo
+  // rather than re-upload — it is a public link, never a secret.
+  if (!check.ok) return { error: check.error, value: undefined, url: raw.slice(0, THUMBNAIL.maxUrlLength) };
+  return { value: check.value, url: check.value };
+}
+
+/**
  * Read + validate a paste form (create and edit share the rules).
  * @param {Record<string, string>} form
  * @param {{ id: number } | null} user
  * @param {'create' | 'edit'} [mode]
+ * @param {any} [env]
  */
-function readPasteInput(form, user, mode = 'create') {
+function readPasteInput(form, user, mode = 'create', env = {}) {
   const errors = [];
   const title = validateTitle(form.title);
   if (!title.ok) errors.push(title.error);
@@ -148,8 +194,13 @@ function readPasteInput(form, user, mode = 'create') {
   if (passphrase.error) errors.push(passphrase.error);
   const burnMode = validateBurnMode(form.burn_after);
   if (!burnMode.ok) errors.push(burnMode.error);
+  const thumbnail = readThumbnail(form, mode, env);
+  if (thumbnail.error) errors.push(thumbnail.error);
   return {
     errors,
+    thumbnailUrl: thumbnail.value,
+    thumbnailValue: thumbnail.url,
+    thumbnailRemove: Boolean(thumbnail.remove),
     title: title.ok ? title.value : String(form.title ?? '').slice(0, 200),
     content: content.ok ? content.value : String(form.content ?? ''),
     language,
@@ -182,8 +233,10 @@ export async function home(ctx) {
       burn_after: DEFAULT_BURN_MODE,
       protected: false,
       visibility: DEFAULT_VISIBILITY,
+      thumbnail_url: '',
     },
     maxBytes: maxBytesFor(ctx.user),
+    uploads: uploadsEnabled(ctx.env),
   });
   return htmlResponse(body, 200, {}, { cache: 'no-store' });
 }
@@ -198,7 +251,7 @@ export async function create(ctx) {
   }
 
   const form = parseForm(await readBody(ctx.request, LIMITS.bodyMaxBytes + 64 * 1024));
-  const input = readPasteInput(form, ctx.user);
+  const input = readPasteInput(form, ctx.user, 'create', ctx.env);
   if (input.errors.length) {
     // Never echo multi-megabyte bodies back into the form on error.
     const oversized = (form.content ?? '').length > 100_000;
@@ -216,9 +269,11 @@ export async function create(ctx) {
         burn_after: input.burnMode,
         protected: input.passphrase.mode === 'set',
         visibility: input.visibility,
+        thumbnail_url: input.thumbnailValue,
       },
       errors: input.errors,
       maxBytes: maxBytesFor(ctx.user),
+      uploads: uploadsEnabled(ctx.env),
     });
     return htmlResponse(body, 400);
   }
@@ -234,6 +289,7 @@ export async function create(ctx) {
     passwordHash: await resolvePassphraseHash(input.passphrase),
     burnMode: input.burnMode,
     visibility: input.visibility,
+    thumbnailUrl: input.thumbnailUrl,
     now: ctx.now,
   });
 
@@ -257,7 +313,12 @@ export async function view(ctx, params) {
   // A failed look-up is never counted as a view and never consumes anything.
   if (!(await canReadPaste(ctx, paste))) {
     return htmlResponse(
-      unlockPage({ ...pageCtx(ctx), paste, burnLabel: burnLabel(paste) }),
+      unlockPage({
+        ...pageCtx(ctx),
+        paste,
+        burnLabel: burnLabel(paste),
+        thumbnailUrl: safeThumbnailUrl(paste.thumbnail_url, ctx.env),
+      }),
       200,
       {},
       { noindex: true },
@@ -285,6 +346,7 @@ export async function view(ctx, params) {
     ...pageCtx(ctx),
     paste: { ...paste, views },
     contentHtml,
+    thumbnailUrl: safeThumbnailUrl(paste.thumbnail_url, ctx.env),
     highlighted: !oversized,
     lineNumbers: !oversized,
     share: ctx.url.searchParams.has('created'),
@@ -377,6 +439,7 @@ export async function unlock(ctx, params) {
       burnLabel: burnLabel(paste),
       errors: ['Wrong passphrase.'],
       locked: true,
+      thumbnailUrl: safeThumbnailUrl(paste.thumbnail_url, ctx.env),
     });
     return htmlResponse(body, 401, {}, { noindex: true });
   }
@@ -447,6 +510,7 @@ export async function forkForm(ctx, params) {
         paste,
         burnLabel: burnLabel(paste),
         next: `/p/${paste.id}/fork`,
+        thumbnailUrl: safeThumbnailUrl(paste.thumbnail_url, ctx.env),
       }),
       200,
       {},
@@ -473,11 +537,15 @@ export async function forkForm(ctx, params) {
       burn_after: DEFAULT_BURN_MODE,
       protected: false,
       visibility: DEFAULT_VISIBILITY,
+      // The thumbnail is a public URL on a shared host, so the copy can point
+      // at the same image. Nothing is re-uploaded and the source is untouched.
+      thumbnail_url: safeThumbnailUrl(paste.thumbnail_url, ctx.env) || '',
     },
     okMessage: oneTime
       ? `This was a one-time paste (${oneTime}) and has now been consumed — the copy you save is the only copy left.`
       : null,
     maxBytes: maxBytesFor(ctx.user),
+    uploads: uploadsEnabled(ctx.env),
   });
   return htmlResponse(body, 200, {}, { noindex: true });
 }
@@ -506,8 +574,11 @@ export async function editForm(ctx, params) {
       burn_after: burnModeOf(paste),
       protected: Boolean(paste.password_hash),
       visibility: paste.visibility,
+      thumbnail_url: safeThumbnailUrl(paste.thumbnail_url, ctx.env) || '',
+      had_thumbnail: Boolean(safeThumbnailUrl(paste.thumbnail_url, ctx.env)),
     },
     maxBytes: maxBytesFor(ctx.user),
+    uploads: uploadsEnabled(ctx.env),
   });
   return htmlResponse(body, 200, {}, { noindex: true });
 }
@@ -523,7 +594,7 @@ export async function editSave(ctx, params) {
   }
 
   const form = parseForm(await readBody(ctx.request, LIMITS.bodyMaxBytes + 64 * 1024));
-  const input = readPasteInput(form, ctx.user, 'edit');
+  const input = readPasteInput(form, ctx.user, 'edit', ctx.env);
   if (input.errors.length) {
     if ((form.content ?? '').length > 100_000) {
       throw new HttpError(413, input.errors.find((e) => /limit/.test(e)) || input.errors[0]);
@@ -543,9 +614,13 @@ export async function editSave(ctx, params) {
         burn_after: input.burnMode,
         protected: Boolean(full?.password_hash),
         visibility: input.visibility,
+        thumbnail_url: input.thumbnailRemove ? '' : input.thumbnailValue || safeThumbnailUrl(full?.thumbnail_url, ctx.env) || '',
+        thumbnail_remove: input.thumbnailRemove,
+        had_thumbnail: Boolean(safeThumbnailUrl(full?.thumbnail_url, ctx.env)),
       },
       errors: input.errors,
       maxBytes: maxBytesFor(ctx.user),
+      uploads: uploadsEnabled(ctx.env),
     });
     return htmlResponse(body, 400, {}, { noindex: true });
   }
@@ -564,6 +639,7 @@ export async function editSave(ctx, params) {
       passwordHash: await resolvePassphraseHash(input.passphrase),
       burnMode: input.burnMode,
       visibility: input.visibility,
+      thumbnailUrl: input.thumbnailUrl,
     },
     ctx.now,
   );
@@ -580,6 +656,67 @@ export async function remove(ctx, params) {
     throw new HttpError(result.reason === 'missing' ? 404 : 403, result.reason === 'missing' ? undefined : 'Only the account that created a paste can delete it.');
   }
   return redirect('/me?deleted=1');
+}
+
+// ---------------------------------------------------------------------------
+// Thumbnails
+// ---------------------------------------------------------------------------
+
+/**
+ * POST /p/thumbnail — upload one image and get a URL back.
+ *
+ * The editor calls this with `multipart/form-data` (field `image`) *before* the
+ * paste is saved, then puts the returned URL in the hidden `thumbnail_url`
+ * input; the paste form itself stays plain urlencoded and keeps working with
+ * JavaScript disabled (paste a link instead). Bytes are forwarded to the
+ * configured image host and never touch the database — the response is a URL.
+ *
+ * It is deliberately not tied to a paste id: nothing is created or modified
+ * here, so an upload cannot burn, unlock or overwrite anything.
+ */
+export async function uploadThumbnailImage(ctx) {
+  if (!uploadsEnabled(ctx.env)) {
+    throw new HttpError(501, 'Image uploads are not configured on this instance. Paste an image URL instead.');
+  }
+  const verdict = await consume(
+    ctx.db,
+    ctx.user ? `thumb:user:${ctx.user.id}` : `thumb:ip:${ctx.ip}`,
+    RATE_LIMITS.thumbnail,
+  );
+  if (!verdict.ok) {
+    throw new HttpError(429, 'Too many image uploads. Try again later.', {
+      'Retry-After': String(verdict.retryAfter),
+    });
+  }
+
+  const contentType = ctx.request.headers.get('content-type') || '';
+  if (!contentType.toLowerCase().includes('multipart/form-data')) {
+    throw new HttpError(415, 'Send the image as multipart/form-data with an "image" field.');
+  }
+  // Cheap ceiling before the body is read at all: the client resizes to a
+  // 1200×630 JPEG, so anything near this is not a resized card.
+  const declared = Number(ctx.request.headers.get('content-length') || 0);
+  if (Number.isFinite(declared) && declared > THUMBNAIL.maxBytes + 64 * 1024) {
+    throw new HttpError(413, 'That image is too large.');
+  }
+
+  let file;
+  try {
+    const body = await ctx.request.formData();
+    file = body.get('image');
+  } catch {
+    throw new HttpError(400, 'That upload could not be read.');
+  }
+  if (!file || typeof file === 'string' || typeof file.arrayBuffer !== 'function') {
+    throw new HttpError(400, 'No image was uploaded.');
+  }
+
+  const check = validateUpload(/** @type {any} */ (file));
+  if (!check.ok) throw new HttpError(415, check.error);
+
+  const result = await uploadThumbnail(/** @type {any} */ (file), String(check.value), ctx.env);
+  if (!result.ok) throw new HttpError(502, result.error);
+  return jsonResponse({ url: result.value }, 201, {}, { noindex: true });
 }
 
 // ---------------------------------------------------------------------------
@@ -671,7 +808,7 @@ export async function myPastes(ctx) {
   ]);
   const body = myPastesPage({
     ...pageCtx(ctx),
-    pastes,
+    pastes: withThumbnails(pastes, ctx.env),
     apiKeys,
     stats,
     newKey: null,
@@ -689,7 +826,7 @@ export async function createKey(ctx) {
   const apiKeys = await listApiKeys(ctx.db, ctx.user.id);
   const pastes = await listUserPastes(ctx.db, ctx.user.id, 200, ctx.now);
   const stats = await userStats(ctx.db, ctx.user.id, ctx.now);
-  const body = myPastesPage({ ...pageCtx(ctx), pastes, apiKeys, stats, newKey: created.plain });
+  const body = myPastesPage({ ...pageCtx(ctx), pastes: withThumbnails(pastes, ctx.env), apiKeys, stats, newKey: created.plain });
   return htmlResponse(body, 201, {}, { noindex: true });
 }
 
@@ -707,7 +844,12 @@ export async function revokeKey(ctx) {
 
 /** GET /docs */
 export async function docs(ctx) {
-  const body = docsPage({ ...pageCtx(ctx), baseUrl: ctx.url.origin });
+  const body = docsPage({
+    ...pageCtx(ctx),
+    baseUrl: ctx.url.origin,
+    thumbnailHosts: allowedThumbnailHosts(ctx.env),
+    thumbnailUploads: uploadsEnabled(ctx.env),
+  });
   return htmlResponse(body, 200, {}, { cache: 'public, max-age=300' });
 }
 

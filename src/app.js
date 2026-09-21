@@ -6,7 +6,7 @@
 
 import { COOKIE, SESSION_REFRESH_SECONDS, SESSION_TTL_SECONDS } from './config.js';
 import { parseCookies, resolveSession, sessionCookie } from './lib/auth.js';
-import { CSP, HttpError, clientIp, headers, htmlResponse, isSecure, jsonResponse } from './lib/http.js';
+import { HttpError, clientIp, contentSecurityPolicy, headers, htmlResponse, isSecure, jsonResponse } from './lib/http.js';
 import { errorPage } from './views/errors.js';
 import * as web from './routes/web.js';
 import * as api from './routes/api.js';
@@ -46,6 +46,7 @@ function compile(pattern) {
 const ROUTE_TABLE = [
   ['GET', '/', web.home],
   ['POST', '/p', web.create],
+  ['POST', '/p/thumbnail', web.uploadThumbnailImage],
   ['GET', '/p/:id', web.view],
   ['POST', '/p/:id/unlock', web.unlock],
   ['GET', '/p/:id/qr', web.qr],
@@ -163,7 +164,7 @@ async function dispatch(ctx) {
     });
     const response = await route.handler(ctx, params);
     if (!response.headers.has('Content-Security-Policy') && isHtml(response)) {
-      response.headers.set('Content-Security-Policy', CSP);
+      response.headers.set('Content-Security-Policy', contentSecurityPolicy(ctx.env));
     }
     return response;
   }
@@ -176,14 +177,29 @@ function isHtml(response) {
   return (response.headers.get('Content-Type') || '').includes('text/html');
 }
 
+/**
+ * Routes that answer with JSON rather than a rendered page, so their failures
+ * must be JSON too. Everything under `/api/`, plus the thumbnail upload
+ * endpoint: it lives under `/p/` because it belongs to the editor, but it is
+ * called with `fetch` and its caller parses the body either way.
+ * @param {Ctx} ctx
+ */
+function expectsJson(ctx) {
+  return ctx.url.pathname.startsWith('/api/') || ctx.url.pathname.replace(/\/+$/, '') === '/p/thumbnail';
+}
+
 /** @param {Ctx} ctx */
 function respondWithError(ctx, error) {
   const status = error instanceof HttpError ? error.status : 500;
-  const isApi = ctx.url.pathname.startsWith('/api/');
+  const isApi = expectsJson(ctx);
 
   if (status >= 500) {
-    // Log for operators; never show internals to users.
-    console.error(`[mantisbin] ${ctx.request.method} ${ctx.url.pathname} -> 500`, error);
+    // Log for operators; never show internals to users. A deliberate HttpError
+    // (e.g. 502 "the image host is down") already carries a complete, safe
+    // message and its cause was logged where it happened — printing its stack
+    // too would bury real, unexpected failures in noise.
+    const detail = error instanceof HttpError ? error.message : error;
+    console.error(`[mantisbin] ${ctx.request.method} ${ctx.url.pathname} -> ${status}`, detail);
   }
 
   const message =
@@ -206,6 +222,6 @@ function respondWithError(ctx, error) {
     user: ctx.user,
     path: ctx.url.pathname,
   });
-  return htmlResponse(body, status, { ...extra, 'Content-Security-Policy': CSP }, { noindex: true });
+  return htmlResponse(body, status, { ...extra, 'Content-Security-Policy': contentSecurityPolicy(ctx.env) }, { noindex: true });
 }
 

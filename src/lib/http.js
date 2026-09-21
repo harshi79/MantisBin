@@ -3,6 +3,7 @@
  */
 
 import { SafeHtml } from './html.js';
+import { allowedThumbnailHosts } from './thumbnail.js';
 
 export class HttpError extends Error {
   /**
@@ -25,19 +26,46 @@ const BASE_HEADERS = {
   'X-Frame-Options': 'DENY',
 };
 
-/** Strict CSP: everything is same-origin, nothing is inlined. */
-export const CSP = [
-  "default-src 'none'",
-  "script-src 'self'",
-  "style-src 'self'",
-  "img-src 'self' data:",
-  "font-src 'none'",
-  "connect-src 'self'",
-  "form-action 'self'",
-  "base-uri 'none'",
-  "frame-ancestors 'none'",
-  "object-src 'none'",
-].join('; ');
+/**
+ * Strict CSP: everything is same-origin, nothing is inlined.
+ *
+ * `img-src` is the one directive that is not purely `'self'`, because paste
+ * thumbnails are hosted off-site. It lists the *exact* image hosts from
+ * `lib/thumbnail.js` — never `https:` — so a stored URL that somehow escaped
+ * validation still cannot make a reader's browser talk to an arbitrary origin.
+ */
+function cspFor(env) {
+  const images = ["'self'", 'data:', ...allowedThumbnailHosts(env).map((host) => `https://${host}`)];
+  return [
+    "default-src 'none'",
+    "script-src 'self'",
+    "style-src 'self'",
+    `img-src ${images.join(' ')}`,
+    "font-src 'none'",
+    "connect-src 'self'",
+    "form-action 'self'",
+    "base-uri 'none'",
+    "frame-ancestors 'none'",
+    "object-src 'none'",
+  ].join('; ');
+}
+
+/** Policy for a request's environment; cached per env object (one per isolate). */
+const cspCache = new WeakMap();
+
+/** @param {any} [env] */
+export function contentSecurityPolicy(env) {
+  if (!env || typeof env !== 'object') return cspFor(env);
+  let policy = cspCache.get(env);
+  if (!policy) {
+    policy = cspFor(env);
+    cspCache.set(env, policy);
+  }
+  return policy;
+}
+
+/** The default policy (no operator-configured hosts) — used by tests and fallbacks. */
+export const CSP = cspFor({});
 
 /**
  * @param {Record<string, string>} [extra]

@@ -338,6 +338,19 @@ select option { background: var(--surface); color: var(--text); }
 textarea { resize: vertical; tab-size: 4; white-space: pre; overflow-wrap: normal; overflow-x: auto; }
 .field-note, .field-help { color: var(--muted); font-size: 12px; line-height: 1.6; margin: 1px 0 0; }
 .label-optional { margin-left: auto; color: var(--muted); font-weight: 400; font-size: 11px; }
+
+/* Editor thumbnail picker. The file input is visually hidden inside its own
+   label, so the label is the (keyboard-reachable) control. */
+.thumbnail-field .thumbnail-preview { margin: 2px 0 4px; }
+.thumbnail-field .thumbnail-preview img {
+  display: block; width: 100%; height: auto; aspect-ratio: 1200 / 630; object-fit: contain;
+  border: 1px solid var(--border); border-radius: 8px; background: var(--surface-2);
+}
+.thumbnail-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.thumbnail-pick { cursor: pointer; }
+.thumbnail-pick:focus-within { outline: 2px solid var(--accent); outline-offset: 2px; }
+.thumbnail-status { flex: 1 1 100%; min-height: 1.4em; }
+.thumbnail-field .field-note b { color: var(--text-dim); }
 .submit-row { display: flex; align-items: flex-end; gap: 12px; flex-wrap: wrap; margin-top: 18px; }
 .submit-row .field { flex: 1; min-width: 170px; }
 .check { display: flex; align-items: flex-start; gap: 8px; font-size: 12px; color: var(--text-dim); font-weight: 400; }
@@ -454,6 +467,23 @@ input[type='checkbox'], input[type='radio'] { accent-color: var(--accent); flex:
 .meta b { color: var(--text-dim); font-weight: 550; }
 .meta > span { display: inline-flex; align-items: center; gap: 6px; }
 .meta > span:not(.badge) + span:not(.badge)::before { content: '·'; color: var(--muted); margin-right: 7px; }
+/* Thumbnail: an off-site, public card image. Fixed 1200x630 box so the page
+   never reflows while it loads, and it is never allowed to grow past it. */
+.thumbnail-figure { margin: 0 0 26px; }
+.thumbnail-image {
+  display: block;
+  width: 100%;
+  max-width: 640px;
+  height: auto;
+  aspect-ratio: 1200 / 630;
+  object-fit: contain;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface-2);
+}
+.thumbnail-figure figcaption { margin-top: 8px; }
+.thumbnail-locked { margin-bottom: 22px; }
+
 .code-wrap { border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--surface); overflow: hidden; box-shadow: var(--shadow); }
 .code-bar { display: flex; align-items: center; gap: 10px; padding: 9px 14px 9px 18px; min-height: 51px; border-bottom: 1px solid var(--border); background: var(--bg-alt); }
 .code-bar > .icon { color: var(--muted); width: 15px; height: 15px; }
@@ -517,6 +547,11 @@ pre.code a:not(.line-number) { color: var(--t-key); }
 .list-item:last-child { border-bottom: 0; }
 .list-item:hover { background: var(--bg-alt); }
 .list-main { min-width: 0; flex: 1 1 auto; }
+.list-thumb { flex: none; display: block; line-height: 0; }
+.list-thumb img {
+  width: 80px; height: 42px; object-fit: cover; display: block;
+  border: 1px solid var(--border); border-radius: 6px; background: var(--surface-2);
+}
 .list-title { font-size: 14px; font-weight: 550; color: var(--text); text-decoration: none; overflow-wrap: anywhere; }
 .list-title:hover { text-decoration: underline; }
 .list-sub { display: flex; align-items: center; gap: 4px 12px; flex-wrap: wrap; color: var(--muted); font-size: 11px; margin-top: 5px; font-variant-numeric: tabular-nums; }
@@ -703,12 +738,14 @@ table.spec td code { font-size: 11px; }
   .code-bar .file-name { display: none; }
   pre.code { padding: 18px 10px; }
   .line-number { width: 2em; margin-right: 1em; }
+  .thumbnail-figure { margin-bottom: 20px; }
   .share-notice { gap: 10px; }
   .share-notice .share { flex-basis: 100%; }
   .page-head { gap: 16px; margin-bottom: 22px; }
   .page-head .actions { margin-left: 0; }
   .list-item { flex-wrap: wrap; padding: 16px; gap: 10px; }
-  .list-main { flex-basis: 100%; }
+  .list-thumb img { width: 64px; height: 34px; }
+  .list-main { flex: 1 1 60%; min-width: 0; }
   .list-actions { justify-content: flex-start; gap: 8px; }
   .list-actions .btn { padding-inline: 0; min-height: 30px; }
   .list-actions .btn:hover { background: transparent; text-decoration: underline; }

@@ -50,7 +50,10 @@ export const SCHEMA = [
     burned        INTEGER NOT NULL DEFAULT 0,
     -- Visibility: 'unlisted' (link-only, the default) or 'public' (listed on
     -- the owner's opt-in profile page). Anonymous pastes are always unlisted.
-    visibility    TEXT    NOT NULL DEFAULT 'unlisted'
+    visibility    TEXT    NOT NULL DEFAULT 'unlisted',
+    -- Optional thumbnail (2.4): a URL on an allowed image host, never bytes.
+    -- The image is public even when the paste is protected — see lib/thumbnail.js.
+    thumbnail_url TEXT
   )`,
   // Listing a user's pastes, newest first.
   `CREATE INDEX IF NOT EXISTS idx_pastes_user_created ON pastes (user_id, created_at DESC)`,
@@ -101,6 +104,8 @@ const MIGRATIONS = [
   { table: 'pastes', column: 'burned', sql: 'ALTER TABLE pastes ADD COLUMN burned INTEGER NOT NULL DEFAULT 0' },
   // Profiles — per-paste visibility. Existing pastes stay unlisted.
   { table: 'pastes', column: 'visibility', sql: "ALTER TABLE pastes ADD COLUMN visibility TEXT NOT NULL DEFAULT 'unlisted'" },
+  // 2.4 — optional thumbnail. Nullable: every existing paste has none.
+  { table: 'pastes', column: 'thumbnail_url', sql: 'ALTER TABLE pastes ADD COLUMN thumbnail_url TEXT' },
 ];
 
 function isDuplicateColumn(error) {

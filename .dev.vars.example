@@ -12,6 +12,30 @@ TURSO_AUTH_TOKEN="your-turso-auth-token"
 #   node -e "console.log(crypto.randomUUID())"
 APP_SECRET="change-me-to-a-long-random-string"
 
+# --- Paste thumbnails (all optional) ---------------------------------------
+# MantisBin never stores image bytes: one image is forwarded to an image host
+# and only the returned URL is saved. A thumbnail is PUBLIC — it stays visible
+# on a password-protected or burn-after-reading paste — so the editor warns
+# authors not to put anything private in one.
+#
+# With nothing set below, uploads go to catbox.moe anonymously.
+#
+# imgtree (https://imgtree.co/api-docs) — set a key to use it instead of catbox.
+#   wrangler secret put IMGTREE_API_KEY
+# IMGTREE_API_KEY="your-imgtree-api-key"
+# IMGTREE_BASE_URL="https://imgtree.co"     # your own deployment, if self-hosted
+# IMGTREE_ALBUM_ID=""                       # optional album for uploads
+#
+# catbox.moe — anonymous by default. A userhash makes uploads deletable later.
+# CATBOX_USERHASH="your-catbox-userhash"
+#
+# Extra hosts allowed for thumbnail URLs (comma or space separated). These are
+# also added to the page's img-src, so only listed hosts can ever be embedded.
+# THUMBNAIL_HOSTS="img.example.com"
+#
+# Set to "off" to disable uploading entirely (a URL field is still offered).
+# THUMBNAIL_UPLOADS="off"
+
 # --- Local Node dev server (scripts/dev.js) only ---
 # Leave DB_FILE unset (or ":memory:") to run without Turso credentials.
 # DB_FILE=".data/mantisbin.db"
