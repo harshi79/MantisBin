@@ -50,17 +50,6 @@ An API key or userhash is a credential; a hostname or album id is not.
 Do nothing. Uploads go to catbox.moe anonymously.
 Optionally add `CATBOX_USERHASH` so uploads stay deletable from your account.
 
-> **Production caveat:** catbox explicitly filters uploads from datacenter /
-> non-residential IPs (see <https://blog.catbox.moe/post/809324731954266112/missing-files-blank-uploads-commercial>),
-> and Cloudflare Workers egress *is* datacenter IPs. In practice that means
-> anonymous catbox uploads from a Worker can be refused (`200 OK` with an error
-> sentence such as `Invalid Uploader`) while the same upload from your laptop
-> works fine. The route now surfaces the host's sentence instead of a generic
-> `502`, so check `wrangler tail` — if you see `catbox refused the upload`,
-> that is what is happening. For a production deployment that must just work,
-> use **Option B** (imgtree): it is a Bearer-key API designed for server-side
-> uploads, with none of that filtering.
-
 ### Option B — use imgtree
 
 1. Create a key at <https://imgtree.co/api-keys> (shown once — copy it).
@@ -109,7 +98,7 @@ allowlisted for you, no second variable needed.
 
 ```bash
 curl -sS https://<your-domain>/api/meta | jq .thumbnail
-# → { "uploads": true, "provider": "catbox", "allowedHosts": ["files.catbox.moe", "imgtree.co", ...], ... }
+# → { "uploads": true, "allowedHosts": ["files.catbox.moe", "imgtree.co", ...], ... }
 
 curl -sSI https://<your-domain>/ | grep -i content-security-policy
 # → img-src must list exactly your hosts, never a bare `https:`
@@ -118,26 +107,7 @@ curl -sS -X POST https://<your-domain>/p/thumbnail -F "image=@card.jpg"
 # → {"url":"https://.../card.jpg"}
 ```
 
-`wrangler tail` streams live logs if an upload misbehaves. Every failed upload
-logs one structured line — provider, upstream status and a sanitized fragment:
-
-```text
-[mantisbin] thumbnail upload failed { provider: 'catbox', status: 502, detail: 'catbox refused the upload: Invalid Uploader' }
-```
-
-`thumbnail.provider` in `/api/meta` tells you which back end is live
-(`imgtree`, `catbox`, or `null` when uploads are off) without leaking any
-secret, so "which host is actually failing?" is one `curl` away.
-
-| Symptom | Meaning | Fix |
-| --- | --- | --- |
-| `502` + `refused the upload ("…")` | The host explicitly rejected the bytes (filtering, policy, bad file). | Read the sentence: `Invalid Uploader` from catbox means datacenter-IP filtering → switch to imgtree (Option B). |
-| `502` + `could not be reached` | Network failure between the Worker and the host (DNS/TLS/down). | Wait and retry; check the host's status. Pastes are unaffected. |
-| `502` + `temporarily unavailable` | imgtree rejected the API key (`401`/`403`). | The log names `IMGTREE_API_KEY`: re-issue it at <https://imgtree.co/api-keys> and `wrangler secret put IMGTREE_API_KEY` again. |
-| `502` + `timed out` | The host took longer than 20 s. | Retry; usually transient. |
-| `429` + `rate-limiting` | The host throttled uploads (shared egress IPs share the quota). | Back off per `Retry-After`; an imgtree key has its own quota. |
-| `413` + `too large` | The host's own size cap bit. | Shrink the image; the client already resizes to 1200×630. |
-| `501` + `not configured` | `THUMBNAIL_UPLOADS=off` and no imgtree key. | Intended: the editor offers only the URL field. |
+`wrangler tail` streams live logs if an upload misbehaves.
 
 ---
 
@@ -154,8 +124,6 @@ secret, so "which host is actually failing?" is one `curl` away.
   delete them later from that account.
 - **No storage cost or new binding.** No R2, no KV, no Durable Objects — the
   database stores a URL and the bytes are somebody else's problem.
-- **If the image host fails**, uploading returns a specific error — usually a
-  `502` naming the refusal, a `429` with `Retry-After` when throttled, or a
-  `413` when the host's own size cap bites — and the editor tells the user to
-  paste a URL instead. Pastes, including ones that already have thumbnails,
-  are entirely unaffected.
+- **If the image host is down**, uploading returns a clean `502` with a readable
+  message and the editor tells the user to paste a URL instead. Pastes,
+  including ones that already have thumbnails, are entirely unaffected.
