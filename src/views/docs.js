@@ -244,7 +244,8 @@ curl -sS ${base}/api/pastes/a8Kx92Lm        # 404 — it is gone</code></pre>
         keep the current image, send a URL to replace it, or <code>null</code> to remove it. A fork
         reuses the source's image unless the copy overrides it. Every paste object reports its
         <code>thumbnailUrl</code> (<code>null</code> when there is none), and
-        <code>GET /api/meta</code> lists the allowed hosts, size cap and accepted types.
+        <code>GET /api/meta</code> lists the allowed hosts, size cap, accepted types and the
+        live upload provider.
       </p>
 
       <h2 id="profiles">Profiles & visibility</h2>
