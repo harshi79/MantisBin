@@ -30,12 +30,15 @@ const BASE_HEADERS = {
  * Strict CSP: everything is same-origin, nothing is inlined.
  *
  * `img-src` is the one directive that is not purely `'self'`, because paste
- * thumbnails are hosted off-site. It lists the *exact* image hosts from
- * `lib/thumbnail.js` — never `https:` — so a stored URL that somehow escaped
- * validation still cannot make a reader's browser talk to an arbitrary origin.
+ * thumbnails are hosted off-site and an author may link an image on any host.
+ * It therefore allows `https:` images generally. This is a deliberate
+ * trade-off: it means a remote `<img>` can log the IP of readers who open a
+ * paste, which the editor warns about — the win is that any image link works
+ * without the operator maintaining a host allowlist. Named default hosts are
+ * still listed (harmless, and useful documentation of the upload target).
  */
 function cspFor(env) {
-  const images = ["'self'", 'data:', ...allowedThumbnailHosts(env).map((host) => `https://${host}`)];
+  const images = ["'self'", 'data:', 'https:', ...allowedThumbnailHosts(env).map((host) => `https://${host}`)];
   return [
     "default-src 'none'",
     "script-src 'self'",

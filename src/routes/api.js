@@ -192,11 +192,11 @@ export async function meta(ctx) {
       maxBytes: THUMBNAIL.maxBytes,
       maxUrlLength: THUMBNAIL.maxUrlLength,
       types: THUMBNAIL.types,
-      /** Only these hosts may be stored or embedded. */
+      /** Any https image URL is accepted; these are only the default img-src hosts. */
       allowedHosts: allowedThumbnailHosts(ctx.env),
       /** Whether `POST /p/thumbnail` can forward image bytes on this instance. */
       uploads: uploadsEnabled(ctx.env),
-      /** Which back end `POST /p/thumbnail` forwards to (`imgtree`, `catbox`, or null when off). */
+      /** Which back end `POST /p/thumbnail` forwards to (`catbox`, or null when off). */
       provider: uploadProvider(ctx.env),
       /** A thumbnail is public even on a protected or one-time paste. */
       public: true,
@@ -240,7 +240,7 @@ export async function create(ctx) {
   const language = resolvePasteLanguage(languageChoice, title.value, content.value, content.bytes);
   const visibility = resolveVisibility(body.visibility, true);
   if (!visibility.ok) throw new HttpError(400, visibility.error);
-  // A thumbnail is a URL on an allowed host — the API never accepts image bytes.
+  // A thumbnail is any https image URL — the API never accepts image bytes.
   const thumbnail = validateThumbnailUrl(body.thumbnailUrl ?? body.thumbnail_url, ctx.env);
   if (!thumbnail.ok) throw new HttpError(400, thumbnail.error);
   const paste = await createPaste(ctx.db, {

@@ -40,7 +40,6 @@ import {
 } from '../lib/unlock.js';
 import { addLineAnchors, renderCode } from '../lib/highlight.js';
 import {
-  allowedThumbnailHosts,
   safeThumbnailUrl,
   uploadThumbnail,
   uploadsEnabled,
@@ -150,7 +149,7 @@ async function resolvePassphraseHash(state) {
  *   create + empty            -> no thumbnail
  *   edit   + empty            -> keep the stored URL untouched
  *   edit   + "remove" checked -> clear it
- *   anything else             -> set (validated against the host allowlist)
+ *   anything else             -> set (validated as an https URL)
  *
  * @param {Record<string, string>} form
  * @param {'create' | 'edit'} mode
@@ -852,7 +851,6 @@ export async function docs(ctx) {
   const body = docsPage({
     ...pageCtx(ctx),
     baseUrl: ctx.url.origin,
-    thumbnailHosts: allowedThumbnailHosts(ctx.env),
     thumbnailUploads: uploadsEnabled(ctx.env),
   });
   return htmlResponse(body, 200, {}, { cache: 'public, max-age=300' });
