@@ -16,6 +16,7 @@ export const ORIGIN = 'https://mantisbin.test';
 export async function createApp(options = {}) {
   const db = createNodeDb(':memory:');
   await ensureSchema(db);
+  /** @type {Record<string, string>} */
   const env = { APP_SECRET: 'test-secret-value', SITE_URL: ORIGIN, ...options.env };
 
   /** @type {Map<string, Map<string, string>>} named cookie jars */

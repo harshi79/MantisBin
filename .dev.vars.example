@@ -36,3 +36,11 @@ APP_SECRET="change-me-to-a-long-random-string"
 
 # Only for embedding the local Node server in an Arena preview. Off by default.
 # DEV_PREVIEW="1"
+
+# --- Administration (optional; disabled until configured) -------------------
+# Add ADMIN_PASSWORD as a Secret in Cloudflare Workers > your Worker >
+# Settings > Variables and Secrets. Use a unique randomly generated password
+# (16–256 characters). APP_SECRET above must also be at least 16 characters.
+# There is deliberately no default admin password. Do NOT commit a real value.
+#   wrangler secret put ADMIN_PASSWORD
+# Visit /admin after deployment. Rotating either secret invalidates admin sessions.

@@ -25,7 +25,7 @@ A fast, minimal paste-sharing utility for plain text and code.
 ## Quick start (local, zero credentials)
 
 ```bash
-npm install
+npm ci
 npm run dev        # http://localhost:8787
 ```
 
@@ -37,6 +37,7 @@ npm test           # end-to-end + unit tests (node:test)
 npm run typecheck  # tsc --noEmit over JSDoc-typed JS
 npm run build      # wrangler deploy --dry-run (bundles the Worker + assets)
 npm run clean-expired   # manual expiration sweep
+npm run check      # tests + typecheck + Worker dry-run build
 ```
 
 ## Workspace UI
@@ -45,7 +46,15 @@ The editor is the homepage, not a landing page. A compact file toolbar holds
 filename, language and display preferences; a separate settings area holds expiry,
 one-time reading, password and visibility controls. On small screens, settings
 collapse above the save action. Server validation errors leave them expanded.
+Optional link-preview images live in their own native disclosure; an existing image
+or a validation error keeps it open so it can be reviewed.
 
+- **Local files:** Open file reads a UTF-8 text/code file in the browser, uses its
+  filename, and switches language back to Auto detect. Oversized, binary, invalid
+  UTF-8 and empty files are rejected. Replacing existing text asks for confirmation.
+  No file content is sent to the server until Save paste.
+- **Editor wrap:** Wrap toggles long-line wrapping without changing content. Line
+  numbers are hidden while wrapped to avoid misleading line alignment.
 - **Keyboard:** Tab inserts four spaces, Shift+Tab leaves the editor, and
   Ctrl/Command+Enter saves from anywhere in the form.
 - **Reading:** Copy and Share are the main actions. Download, Duplicate, QR and
@@ -53,10 +62,94 @@ collapse above the save action. Server validation errors leave them expanded.
 - **Progressive enhancement:** forms and disclosures work without JavaScript.
   JavaScript adds local draft recovery, a bounded line-number gutter, instant
   themes, and copy/share feedback. No UI framework or font downloads are needed.
+- **Draft safety:** Draft content is stored as plain text in localStorage (up to
+  1 MB), never encrypted; passphrases are excluded. Visiting the editor without
+  changing anything preserves a recoverable draft. Clearing a saved draft cancels
+  pending autosave, and it stays cleared until you make another change.
 
 For Arena's embedded local preview, set `DEV_PREVIEW=1` when starting the Node
 server. This permits only Arena/preview frame ancestors in development; normal
 local runs and the production Worker keep their existing anti-framing headers.
+
+## Administration (optional)
+
+The private control room is at **`/admin`**. It is **disabled by default** and is
+separate from regular MantisBin accounts. A user account cannot grant itself
+administrator access.
+
+### Enable it in Cloudflare
+
+1. Deploy this version of the Worker.
+2. Open **Cloudflare Dashboard → Workers & Pages → your Worker → Settings →
+   Variables and Secrets → Add** (wording may vary by dashboard version).
+3. Choose **Secret**, name it **`ADMIN_PASSWORD`**, and enter a unique randomly
+   generated password of **16–256 characters**. Save/deploy the secret change.
+4. Ensure **`APP_SECRET`** is also set as a secret with at least **16 characters**
+   (already required by the production setup). Do not reuse the admin password.
+5. Visit **`https://your-domain/admin`** and sign in with the admin password.
+   There is no admin username, signup route, or default password.
+
+CLI equivalent: `npx wrangler secret put ADMIN_PASSWORD`. Never put real secrets
+in `wrangler.jsonc`, Git, screenshots, or chat. For local use, put your own values
+in the gitignored `.dev.vars` file. An unset/short secret produces a disabled
+administration page without affecting the public app.
+
+### What the dashboard does
+
+- **Overview:** active anonymous/account-owned pastes, account/suspension counts,
+  stored content bytes, cleanup backlog, and 14 days of creation dates for retained
+  pastes. These are database snapshots, **not lifetime analytics**: consumed or
+  cleaned-up pastes disappear. Anonymous also includes pastes anonymised after
+  account deletion. No visitor profiles, cookies for analytics, or tracking scripts
+  are added. The charts do not measure unique people.
+- **Pastes:** paginated metadata search by paste ID/owner, filters for ownership,
+  status and protection, and individual deletion with a confirmation and reason.
+  Lists never load titles, bodies, thumbnails, password hashes, or raw links. They
+  cannot unlock protected pastes or consume one-time pastes.
+- **Accounts:** search, suspend/restore, revoke all sessions/API keys, or delete.
+  Suspension blocks account authentication but is **not a visitor/IP ban**;
+  existing paste URLs stay readable. Account deletion preserves pastes but makes
+  them anonymous and unlisted. Revoke keys/sessions permanently; restoration
+  requires a fresh login and new keys. Suspended users cannot use existing keys.
+- **Cleanup:** explicitly confirmed manual batches of up to 200 expired/consumed
+  pastes. Eligibility is checked again inside the transaction. Scheduled hourly
+  cleanup is unchanged; a manual action does not prove the cron is healthy.
+- **Audit log:** successful/failed password sign-ins, sign-outs and moderation
+  actions, with UTC timestamps and required moderation reasons. Shared-password
+  access is identified by a random **session actor**, not an individual person.
+  Moderation and its audit entry are committed atomically. Audit records are kept
+  until an operator applies a retention policy directly to the database; there
+  is no dashboard action for clearing them.
+
+### Admin access protections
+
+Admin sessions use independent opaque random tokens, stored only as hashes in
+the database, with HttpOnly, SameSite=Strict, Secure-on-HTTPS cookies scoped to
+`/admin`. Sessions expire after one hour, without sliding renewal. Every admin
+mutation requires an authenticated session, same-origin POST, and CSRF token;
+moderation also requires explicit confirmation and a reason. Password attempts
+are limited to 5 per pseudonymous IP and 50 globally per 15 minutes, so a targeted
+attack can temporarily delay even a correct login. Admin responses are no-store,
+noindex and use a same-origin referrer policy (no referrers to other sites).
+
+Rotate **`ADMIN_PASSWORD`** to revoke all administrator sessions. Rotating
+`APP_SECRET` also invalidates them. Use HTTPS in production. A shared password is
+not MFA or individual administrator identity; for stronger access control, put
+`/admin` behind Cloudflare Access as an additional layer. No secret or production
+access policy is provisioned automatically by this code.
+
+The schema adds `users.suspended_at`, `admin_sessions`, and `admin_audit` via
+idempotent additive migrations. Back up production before deploying. Expired
+admin sessions are pruned by scheduled maintenance; existing users remain active.
+
+## Reproducible checks
+
+`package-lock.json` is tracked. Use `npm ci` for a clean, reproducible install;
+use `npm install` when intentionally changing dependencies and include the updated
+lockfile. GitHub Actions runs `npm run check` on Node 22 and 24 for pushes and pull
+requests. The build is a **dry run**, not a deployment, and needs no production
+credentials. The Worker compatibility date is deliberately unchanged: package
+updates do not implicitly opt production into new runtime behavior.
 
 ## Deploy to Cloudflare
 

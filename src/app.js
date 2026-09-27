@@ -11,6 +11,7 @@ import { errorPage } from './views/errors.js';
 import * as web from './routes/web.js';
 import * as api from './routes/api.js';
 import * as profile from './routes/profile.js';
+import * as admin from './routes/admin.js';
 
 /**
  * @typedef {object} Ctx
@@ -44,6 +45,15 @@ function compile(pattern) {
 
 /** @type {Array<[string, string, (ctx: Ctx, params: Record<string, string>) => Promise<Response>]>} */
 const ROUTE_TABLE = [
+  ['GET', '/admin', admin.overview],
+  ['GET', '/admin/login', admin.loginForm],
+  ['POST', '/admin/login', admin.login],
+  ['POST', '/admin/logout', admin.logout],
+  ['GET', '/admin/pastes', admin.pastes],
+  ['GET', '/admin/users', admin.users],
+  ['GET', '/admin/audit', admin.audit],
+  ['GET', '/admin/confirm', admin.confirm],
+  ['POST', '/admin/action', admin.perform],
   ['GET', '/', web.home],
   ['POST', '/p', web.create],
   ['POST', '/p/thumbnail', web.uploadThumbnailImage],
@@ -122,7 +132,7 @@ export async function handleRequest({ request, env, db }) {
   let sessionCookieValue = null;
   try {
     const token = cookies[COOKIE.session];
-    if (token) {
+    if (token && !url.pathname.match(/^\/admin(?:\/|$)/)) {
       const session = await resolveSession(db, token, now);
       if (session) {
         ctx.user = { id: session.user.id, username: session.user.username };
@@ -140,9 +150,9 @@ export async function handleRequest({ request, env, db }) {
 
     const response = await dispatch(ctx);
     if (sessionCookieValue) response.headers.append('Set-Cookie', sessionCookieValue);
-    return response;
+    return privateAdminHeaders(ctx, response);
   } catch (error) {
-    return respondWithError(ctx, error);
+    return privateAdminHeaders(ctx, respondWithError(ctx, error));
   }
 }
 
@@ -225,3 +235,15 @@ function respondWithError(ctx, error) {
   return htmlResponse(body, status, { ...extra, 'Content-Security-Policy': contentSecurityPolicy(ctx.env) }, { noindex: true });
 }
 
+/** Private admin responses (including redirects and errors) must never be cached. */
+function privateAdminHeaders(ctx, response) {
+  if (/^\/admin(?:\/|$)/.test(ctx.url.pathname)) {
+    response.headers.set('Cache-Control', 'no-store');
+    response.headers.set('X-Robots-Tag', 'noindex, nofollow');
+    // no-referrer makes native POST form Origins opaque in browsers, breaking
+    // our exact-origin CSRF check. same-origin preserves those, but never sends
+    // an admin URL as a referrer to another site.
+    response.headers.set('Referrer-Policy', 'same-origin');
+  }
+  return response;
+}

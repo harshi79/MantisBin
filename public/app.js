@@ -3,9 +3,11 @@
  *   - instant theme switching (cookie + attribute, no reload)
  *   - live byte counter + Tab/Ctrl+Enter niceties in the editor
  *   - remembered language/font/size for the create form
+ *   - local UTF-8 file import and editor word wrap
  *   - local draft recovery for the create form
  *   - copy, share, select-all and delete-confirmation helpers
- * No frameworks, no network calls, no inline event handlers.
+ * No frameworks or inline event handlers. Text-file import stays local;
+ * only optional thumbnail uploads make enhancement-driven network requests.
  */
 (function () {
   'use strict';
@@ -68,7 +70,8 @@
   // Render only the visible line numbers, even for multi-megabyte pastes.
   function renderGutter() {
     if (!editor || !gutter || !gutterNumbers) return;
-    gutter.hidden = false;
+    gutter.hidden = editor.classList.contains('editor-wrapped');
+    if (gutter.hidden) return;
     var style = window.getComputedStyle(editor);
     var height = parseFloat(style.lineHeight);
     if (!height) return;
@@ -169,6 +172,75 @@
     }
     if (expirationSelect) expirationSelect.addEventListener('change', updateSettingsSummary);
     updateSettingsSummary();
+  }
+
+  /* ---- local file import and word wrap ---------------------------------- */
+
+  var wrapEditorButton = doc.querySelector('[data-editor-wrap]');
+  if (editor && wrapEditorButton) {
+    wrapEditorButton.hidden = false;
+    wrapEditorButton.addEventListener('click', function () {
+      var wrapped = editor.classList.toggle('editor-wrapped');
+      wrapEditorButton.setAttribute('aria-pressed', String(wrapped));
+      renderGutter();
+    });
+  }
+
+  var importButton = doc.querySelector('[data-import-button]');
+  var importFile = doc.querySelector('[data-import-file]');
+  var importStatus = doc.querySelector('[data-import-status]');
+  function reportImport(message, failed) {
+    if (!importStatus) return;
+    importStatus.hidden = false;
+    importStatus.textContent = message;
+    importStatus.setAttribute('data-error', String(Boolean(failed)));
+  }
+  if (editor && importButton && importFile && window.TextDecoder) {
+    importButton.hidden = false;
+    importButton.addEventListener('click', function () { importFile.click(); });
+    importFile.addEventListener('change', async function () {
+      var file = importFile.files && importFile.files[0];
+      if (!file) return;
+      importButton.disabled = true;
+      try {
+        var limit = Number(counter && counter.getAttribute('data-limit'));
+        if (!limit || file.size > limit) {
+          reportImport('This file is too large. The limit is ' + formatBytes(limit) + '.', true);
+          return;
+        }
+        var text = new TextDecoder('utf-8', { fatal: true }).decode(await file.arrayBuffer());
+        if (/[\x00-\x08\x0e-\x1f]/.test(text)) {
+          reportImport('Choose a UTF-8 text or code file, not a binary file.', true);
+          return;
+        }
+        if (!text.trim()) {
+          reportImport('This file is empty. Choose a file with some text.', true);
+          return;
+        }
+        // Confirm after reading so text typed during the read is protected too.
+        if (editor.value && !window.confirm('Replace the text currently in the editor with ' + file.name + '?')) {
+          reportImport('Import cancelled. Your text is unchanged.');
+          return;
+        }
+        editor.value = text;
+        if (filenameInput) {
+          filenameInput.value = file.name.slice(0, filenameInput.maxLength > 0 ? filenameInput.maxLength : 120);
+          filenameInput.dispatchEvent(new Event('input'));
+        }
+        if (languageSelect) {
+          languageSelect.value = 'auto';
+          languageSelect.dispatchEvent(new Event('change'));
+        }
+        editor.dispatchEvent(new Event('input'));
+        editor.focus();
+        reportImport('Opened ' + file.name + ' locally. Nothing is uploaded until you save.');
+      } catch (error) {
+        reportImport('Could not read this file. Choose a UTF-8 text or code file.', true);
+      } finally {
+        importButton.disabled = false;
+        importFile.value = '';
+      }
+    });
   }
 
   /* ---- remembered controls on the create form --------------------------- */
@@ -427,6 +499,7 @@
   var draftForm = remember && remember.getAttribute('data-draft') ? remember : null;
   var draftTimer = null;
   var draftSubmitted = false;
+  var draftDirty = false;
 
   function draftField(name) {
     return draftForm ? draftForm.querySelector('[name="' + name + '"]') : null;
@@ -458,6 +531,9 @@
   }
 
   function clearDraft(updateUi) {
+    if (draftTimer) clearTimeout(draftTimer);
+    draftTimer = null;
+    draftDirty = false;
     try {
       localStorage.removeItem(DRAFT_KEY);
     } catch (e) {
@@ -470,7 +546,7 @@
   }
 
   // The passphrase field is deliberately absent here (and from restoreDraft):
-  // local drafts are plain-text in localStorage, so secrets never go in them.
+  // local drafts are plain-text in localStorage, so passphrases never go in them.
   function draftValues() {
     return {
       title: (draftField('title') || {}).value || '',
@@ -490,13 +566,13 @@
   }
 
   function saveDraft() {
-    if (!draftForm || draftSubmitted || !editor) return;
+    if (!draftForm || draftSubmitted || !editor || !draftDirty) return;
     var values = draftValues();
     var meaningfulTitle = values.title && values.title !== defaultTitle() ? values.title : '';
     if (!meaningfulTitle && !values.content) {
       clearDraft(false);
       setDraftButtons(false);
-      setDraftStatus('Drafts stay in this browser.');
+      setDraftStatus('Drafts are saved as plain text in this browser.');
       return;
     }
     if (byteLength(values.content) > DRAFT_MAX_BYTES) {
@@ -507,6 +583,7 @@
     }
     try {
       localStorage.setItem(DRAFT_KEY, JSON.stringify(values));
+      draftDirty = false;
       setDraftButtons(true);
       setDraftStatus('Draft saved locally at ' + new Date(values.savedAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) + '.');
     } catch (e) {
@@ -516,6 +593,7 @@
 
   function scheduleDraftSave() {
     if (!draftForm || draftSubmitted) return;
+    draftDirty = true;
     if (draftTimer) clearTimeout(draftTimer);
     draftTimer = setTimeout(saveDraft, 650);
   }
@@ -541,6 +619,8 @@
   }
 
   if (draftForm) {
+    draftForm.addEventListener('input', scheduleDraftSave);
+    draftForm.addEventListener('change', scheduleDraftSave);
     var existingDraft = readDraft();
     var restoreButton = draftForm.querySelector('[data-draft-restore]');
     var discardButton = draftForm.querySelector('[data-draft-discard]');
@@ -576,6 +656,9 @@
     });
     window.addEventListener('pagehide', function () {
       if (!draftSubmitted) saveDraft();
+    });
+    window.addEventListener('pageshow', function () {
+      draftSubmitted = false;
     });
   }
 
