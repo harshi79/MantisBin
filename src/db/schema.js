@@ -16,7 +16,8 @@ export const SCHEMA = [
     username     TEXT    NOT NULL,
     username_key TEXT    NOT NULL UNIQUE,
     password     TEXT    NOT NULL,
-    created_at   INTEGER NOT NULL
+    created_at   INTEGER NOT NULL,
+    suspended_at INTEGER
   )`,
 
   `CREATE TABLE IF NOT EXISTS sessions (
@@ -57,6 +58,8 @@ export const SCHEMA = [
   )`,
   // Listing a user's pastes, newest first.
   `CREATE INDEX IF NOT EXISTS idx_pastes_user_created ON pastes (user_id, created_at DESC)`,
+  // Administrator metadata pagination and retained-paste date summaries.
+  `CREATE INDEX IF NOT EXISTS idx_pastes_created ON pastes (created_at DESC, id DESC)`,
   // Expiration sweeps.
   `CREATE INDEX IF NOT EXISTS idx_pastes_expires ON pastes (expires_at)`,
 
@@ -79,6 +82,25 @@ export const SCHEMA = [
     PRIMARY KEY (paste_id, visitor)
   )`,
   `CREATE INDEX IF NOT EXISTS idx_paste_views_created ON paste_views (created_at)`,
+
+  // Admin access is separate from ordinary accounts. Only session hashes persist.
+  `CREATE TABLE IF NOT EXISTS admin_sessions (
+    token_hash TEXT PRIMARY KEY,
+    actor TEXT NOT NULL,
+    credential_version TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    expires_at INTEGER NOT NULL
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_admin_sessions_expiry ON admin_sessions (expires_at)`,
+  `CREATE TABLE IF NOT EXISTS admin_audit (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    actor TEXT NOT NULL,
+    action TEXT NOT NULL,
+    target TEXT NOT NULL,
+    reason TEXT NOT NULL,
+    created_at INTEGER NOT NULL
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_admin_audit_created ON admin_audit (created_at DESC, id DESC)`,
 
   `CREATE TABLE IF NOT EXISTS rate_limits (
     bucket   TEXT    PRIMARY KEY,
@@ -106,6 +128,7 @@ const MIGRATIONS = [
   { table: 'pastes', column: 'visibility', sql: "ALTER TABLE pastes ADD COLUMN visibility TEXT NOT NULL DEFAULT 'unlisted'" },
   // 2.4 — optional thumbnail. Nullable: every existing paste has none.
   { table: 'pastes', column: 'thumbnail_url', sql: 'ALTER TABLE pastes ADD COLUMN thumbnail_url TEXT' },
+  { table: 'users', column: 'suspended_at', sql: 'ALTER TABLE users ADD COLUMN suspended_at INTEGER' },
 ];
 
 function isDuplicateColumn(error) {

@@ -21,6 +21,7 @@ import { validatePassword, validateUsername } from './validate.js';
  * @property {number} id
  * @property {string} username
  * @property {string} password
+ * @property {number | null} [suspended_at]
  * @property {number} created_at
  */
 
@@ -107,14 +108,14 @@ export async function findUserByUsername(db, username) {
     .trim()
     .toLowerCase();
   if (!key) return null;
-  const row = await db.get('SELECT id, username, password, created_at FROM users WHERE username_key = ?', [key]);
+  const row = await db.get('SELECT id, username, password, created_at, suspended_at FROM users WHERE username_key = ?', [key]);
   return /** @type {User | null} */ (row);
 }
 
 /** @param {Db} db */
 export async function findUserById(db, id) {
   if (!Number.isFinite(Number(id))) return null;
-  const row = await db.get('SELECT id, username, password, created_at FROM users WHERE id = ?', [Number(id)]);
+  const row = await db.get('SELECT id, username, password, created_at, suspended_at FROM users WHERE id = ?', [Number(id)]);
   return /** @type {User | null} */ (row);
 }
 
@@ -139,7 +140,7 @@ export async function authenticate(db, username, password) {
   }
   if (typeof password !== 'string' || password.length === 0) return null;
   const ok = await verifyPassword(password, user.password);
-  return ok ? user : null;
+  return ok && user.suspended_at == null ? user : null;
 }
 
 // ---------------------------------------------------------------------------
@@ -179,7 +180,7 @@ export async function resolveSession(db, token, now = Math.floor(Date.now() / 10
     return null;
   }
   const user = await findUserById(db, session.user_id);
-  if (!user) {
+  if (!user || user.suspended_at != null) {
     await db.run('DELETE FROM sessions WHERE token_hash = ?', [tokenHash]);
     return null;
   }
@@ -238,7 +239,7 @@ export async function authenticateApiKey(db, plainKey, now = Math.floor(Date.now
   );
   if (!key) return null;
   const user = await findUserById(db, key.user_id);
-  if (!user) return null;
+  if (!user || user.suspended_at != null) return null;
   // Fire-and-forget style touch; failures must not break the request.
   await db.run('UPDATE api_keys SET last_used_at = ? WHERE id = ?', [now, key.id]).catch(() => {});
   return { key, user };

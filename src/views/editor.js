@@ -53,10 +53,18 @@ export function editorPage(options) {
   const body = html`
     <div class="workspace-head">
       <div>
+        <p class="eyebrow">A home for your text &amp; code</p>
         <h1>${heading}</h1>
         <p class="tagline">${tagline}</p>
       </div>
-      <span class="workspace-note">${icon('link')}${options.user ? html`Signed in as ${options.user.username}` : 'No account needed'}</span>
+      <div class="workspace-context">
+        <ol class="workspace-steps" aria-label="Paste workflow">
+          <li class="is-current"><span>01</span> Write</li>
+          <li><span>02</span> Save</li>
+          <li><span>03</span> Share</li>
+        </ol>
+        <span class="workspace-note">${icon('link')}${options.user ? html`Signed in as ${options.user.username}` : 'No account needed. Just a link.'}</span>
+      </div>
     </div>
     ${alertBox(options.errors, options.okMessage)}
     ${isFork
@@ -74,6 +82,8 @@ export function editorPage(options) {
             <input class="title-input" id="title" name="title" type="text" value="${values.title}"
               maxlength="${LIMITS.titleMax}" required autocomplete="off" spellcheck="false"
               data-filename aria-describedby="filename-help" placeholder="${DEFAULT_FILENAME}">
+            <button class="btn btn-sm btn-ghost import-button" type="button" data-import-button hidden title="Open a UTF-8 text or code file locally">${icon('upload')}<span>Open file</span></button>
+            <input type="file" data-import-file hidden aria-label="Open a text or code file">
             <span class="file-state">${isEdit ? 'Editing' : 'Not saved yet'}</span>
           </div>
           <p class="sr-only" id="filename-help">The filename extension picks the language when Auto detect is on. For example, app.py becomes Python.</p>
@@ -105,17 +115,21 @@ export function editorPage(options) {
               placeholder="Paste text or code here.&#10;Or start typing.">${values.content}</textarea>
           </div>
           <div class="editor-statusbar">
-            <span data-line-count>Plain text &amp; code</span>
+            <div class="editor-status-left">
+              <span data-line-count>Plain text &amp; code</span>
+              <button class="btn btn-sm btn-ghost editor-wrap" type="button" data-editor-wrap aria-pressed="false" hidden title="Wrap long lines (hides line numbers)">${icon('wrap')} Wrap</button>
+            </div>
             <span class="counter" data-counter data-limit="${options.maxBytes}" aria-live="polite">${formatBytes(new TextEncoder().encode(values.content).byteLength)} / ${formatBytes(options.maxBytes)}</span>
           </div>
         </div>
+        <p class="import-status" data-import-status role="status" hidden></p>
         <div class="editor-below">
           <p id="editor-help">${icon('code')} Just text. Nothing here is executed.<span class="sr-only">Tab indents. Shift+Tab leaves the editor. Control or Command+Enter saves.</span></p>
           <span class="filename-tip">Tip: <span class="mono">.py</span>, <span class="mono">.js</span>, <span class="mono">.md</span> — the filename sets the language.</span>
         </div>
         ${!isEdit && !isFork
           ? html`<div class="draft-tools" role="status">
-              <span data-draft-status>Drafts stay in this browser.</span>
+              <span data-draft-status>Drafts are saved as plain text in this browser.</span>
               <button class="btn btn-sm btn-ghost" type="button" data-draft-restore hidden>Restore draft</button>
               <button class="btn btn-sm btn-ghost" type="button" data-draft-discard hidden>Discard</button>
               <button class="btn btn-sm btn-ghost" type="button" data-draft-clear hidden>Clear saved draft</button>
@@ -150,6 +164,8 @@ export function editorPage(options) {
               ? html`<label class="check"><input type="checkbox" name="remove_password" value="1"><span>Remove the current password</span></label>`
               : ''}
           </div>
+          <details class="thumbnail-options" ${thumbnail || canRemoveThumbnail || options.errors?.length ? html`open` : ''}>
+            <summary>${icon('image')}<span>Link preview image</span><span class="label-optional">optional</span>${icon('plus')}</summary>
           <div class="field thumbnail-field" data-thumbnail-field data-max-width="${THUMBNAIL.width}"
             data-max-height="${THUMBNAIL.height}" data-quality="${THUMBNAIL.quality}" data-max-bytes="${THUMBNAIL.maxBytes}"
             ${options.uploads ? html`data-uploads="1"` : ''}>
@@ -185,6 +201,7 @@ export function editorPage(options) {
               ? html`<label class="check"><input type="checkbox" name="remove_thumbnail" value="1" data-thumbnail-remove ${values.thumbnail_remove ? html`checked` : ''}><span>Remove the current thumbnail</span></label>`
               : ''}
           </div>
+          </details>
           ${options.user
             ? html`<fieldset class="visibility-field">
                 <legend class="legend">Visibility</legend>

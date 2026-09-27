@@ -24,6 +24,7 @@ export async function runMaintenance(db, now = Math.floor(Date.now() / 1000)) {
   const views = await pruneViewLog(db, now);
   const sessions = await pruneSessions(db, now);
   const rateLimits = await pruneRateLimits(db, now);
+  await db.run('DELETE FROM admin_sessions WHERE token_hash IN (SELECT token_hash FROM admin_sessions WHERE expires_at <= ? LIMIT 1000)', [now]);
   const summary = { expired, burned, viewLog: views, sessions, rateLimits };
   console.log('[mantisbin] maintenance', JSON.stringify(summary));
   return summary;

@@ -14,9 +14,6 @@ data/
 .env.*
 !.dev.vars.example
 
-# Package lock (repo convention: dependencies are pinned by semver ranges)
-package-lock.json
-
 # Build output
 dist/
 .wrangler/

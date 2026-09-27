@@ -29,8 +29,8 @@ export function layout({ title, description, theme = 'auto', user = null, noinde
 <meta name="description" content="${description || SITE.description}">
 ${noindex ? html`<meta name="robots" content="noindex, nofollow">` : ''}
 <meta name="color-scheme" content="dark light">
-<meta name="theme-color" content="#141716" media="(prefers-color-scheme: dark)">
-<meta name="theme-color" content="#f7f8f6" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#101815" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#f4f6f3" media="(prefers-color-scheme: light)">
 <link rel="icon" type="image/svg+xml" href="/favicon.svg">
 <link rel="stylesheet" href="/app.css">
 <meta property="og:site_name" content="${SITE.name}">

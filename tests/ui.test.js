@@ -87,7 +87,15 @@ test('viewer keeps secondary actions in a no-JS disclosure and preserves labelle
 function element(attributes = {}, text = '') {
   const attrs = new Map(Object.entries(attributes));
   const events = new Map();
+  const classes = new Set();
   return {
+    classList: {
+      contains: (name) => classes.has(name),
+      add: (name) => classes.add(name),
+      toggle(name) { if (classes.has(name)) { classes.delete(name); return false; } classes.add(name); return true; },
+    },
+    focus() {},
+    dispatchEvent(event) { return this.dispatch(event.type, event); },
     value: '', textContent: text, title: '',
     getAttribute: (name) => attrs.get(name) ?? null,
     hasAttribute: (name) => attrs.has(name),
@@ -100,7 +108,7 @@ function element(attributes = {}, text = '') {
   };
 }
 
-function runClient(selectors = {}, lists = {}) {
+function runClient(selectors = {}, lists = {}, globals = {}) {
   const root = element({ 'data-theme': 'auto' });
   const timers = [];
   const copied = [];
@@ -111,10 +119,12 @@ function runClient(selectors = {}, lists = {}) {
     addEventListener() {},
   };
   runInNewContext(clientSource, {
-    document, URL, TextEncoder,
-    window: { location: { href: 'https://mantisbin.test/' }, isSecureContext: true },
+    document, URL, TextEncoder, TextDecoder, Event,
+    requestAnimationFrame: (fn) => { fn(); return 1; }, cancelAnimationFrame() {},
+    window: { location: { href: 'https://mantisbin.test/' }, isSecureContext: true, addEventListener() {} },
     navigator: { clipboard: { writeText: (value) => { copied.push(value); return Promise.resolve(); } } },
-    setTimeout: (fn) => timers.push(fn), clearTimeout() {},
+    setTimeout: (fn) => timers.push(fn), clearTimeout: (id) => { timers[id - 1] = null; },
+    ...globals,
   });
   return { root, document, timers, copied };
 }
@@ -157,4 +167,165 @@ test('copy feedback changes only the text label, not the button icon', async () 
   assert.equal(button.getAttribute('aria-live'), 'polite');
   client.timers[0]();
   assert.equal(label.textContent, 'Copy');
+});
+
+
+/** @param {{ draft?: any, confirm?: () => boolean, content?: string }} options */
+function editorClient({ draft = null, confirm = () => true, content = '' } = {}) {
+  const editor = element();
+  editor.value = content;
+  const counter = element({ 'data-limit': '1024' });
+  const filename = element();
+  filename.value = 'untitled.txt';
+  const language = element({ 'data-extensions': '{"py":"Python"}' });
+  language.value = 'auto';
+  const importButton = element();
+  const importFile = element();
+  const importStatus = element();
+  const wrap = element();
+  const status = element();
+  const clear = element();
+  const restore = element();
+  const form = element({ 'data-draft': 'new', 'data-default-title': 'untitled.txt' });
+  form.querySelector = (name) => ({
+    '[name="title"]': filename, '[name="language"]': language,
+    '[data-draft-status]': status, '[data-draft-clear]': clear, '[data-draft-restore]': restore,
+  })[name] || null;
+  const storage = new Map();
+  const key = 'mantisbin:draft:v1';
+  if (draft) storage.set(key, JSON.stringify(draft));
+  const events = new Map();
+  const client = runClient({
+    'textarea[name="content"]': editor, '[data-counter]': counter,
+    '[data-filename]': filename, 'select[name="language"][data-extensions]': language,
+    '[data-import-button]': importButton, '[data-import-file]': importFile,
+    '[data-import-status]': importStatus, '[data-editor-wrap]': wrap,
+    'form[data-remember]': form,
+  }, {}, {
+    localStorage: {
+      getItem: (key) => storage.get(key) || null,
+      setItem: (key, value) => storage.set(key, value),
+      removeItem: (key) => storage.delete(key),
+    },
+    window: {
+      location: { href: 'https://mantisbin.test/' }, TextDecoder, confirm,
+      addEventListener: (name, fn) => events.set(name, fn),
+    },
+  });
+  return { ...client, editor, filename, language, importButton, importFile, importStatus, wrap,
+    status, clear, restore, form, storage, key, events,
+    flush() { const pending = client.timers.splice(0); pending.forEach((fn) => fn?.()); },
+  };
+}
+
+test('local file import populates content and filename, resets detection and schedules a draft', async () => {
+  const c = editorClient();
+  c.language.value = 'javascript';
+  c.importFile.files = [new File(['print("hello")'], 'hello.py')];
+  await c.importFile.dispatch('change');
+  assert.equal(c.editor.value, 'print("hello")');
+  assert.equal(c.filename.value, 'hello.py');
+  assert.equal(c.language.value, 'auto');
+  assert.equal(c.importButton.disabled, false);
+  assert.equal(c.importFile.value, '');
+  assert.match(c.importStatus.textContent, /Nothing is uploaded until you save/);
+  c.flush();
+  assert.equal(JSON.parse(c.storage.get(c.key)).title, 'hello.py');
+});
+
+test('file import rejects oversized, invalid UTF-8, binary and empty files without changing text', async () => {
+  for (const file of [
+    new File(['x'.repeat(1025)], 'large.txt'),
+    new File([new Uint8Array([0xff, 0xfe])], 'invalid.txt'),
+    new File(['a\0b'], 'binary.bin'),
+    new File(['  '], 'empty.txt'),
+  ]) {
+    const c = editorClient({ content: 'keep me' });
+    c.importFile.files = [file];
+    await c.importFile.dispatch('change');
+    assert.equal(c.editor.value, 'keep me');
+    assert.equal(c.filename.value, 'untitled.txt');
+    assert.equal(c.importStatus.getAttribute('data-error'), 'true');
+    assert.equal(c.importButton.disabled, false);
+  }
+});
+
+test('oversized files are rejected before reading them into memory', async () => {
+  const c = editorClient();
+  c.importFile.files = [{ name: 'large.txt', size: 2048, arrayBuffer() { throw new Error('must not read'); } }];
+  await c.importFile.dispatch('change');
+  assert.match(c.importStatus.textContent, /too large/);
+});
+
+test('cancelling import protects current work, including changes made while a file is read', async () => {
+  const c = editorClient({ confirm: () => false });
+  let finish;
+  c.importFile.files = [{ name: 'note.txt', size: 4, arrayBuffer: () => new Promise((resolve) => { finish = resolve; }) }];
+  const reading = c.importFile.dispatch('change');
+  c.editor.value = 'typed while reading';
+  finish(new TextEncoder().encode('file').buffer);
+  await reading;
+  assert.equal(c.editor.value, 'typed while reading');
+  assert.match(c.importStatus.textContent, /cancelled/);
+});
+
+test('editor wrap is an accessible toggle and does not modify the content', () => {
+  const c = editorClient({ content: 'a long line' });
+  c.wrap.dispatch('click');
+  assert.equal(c.wrap.getAttribute('aria-pressed'), 'true');
+  assert.equal(c.editor.classList.contains('editor-wrapped'), true);
+  c.wrap.dispatch('click');
+  assert.equal(c.wrap.getAttribute('aria-pressed'), 'false');
+  assert.equal(c.editor.value, 'a long line');
+});
+
+test('visiting and leaving an untouched editor does not erase a recoverable draft', () => {
+  const draft = { title: 'keep.py', content: 'important work' };
+  const c = editorClient({ draft });
+  c.events.get('pagehide')();
+  assert.deepEqual(JSON.parse(c.storage.get(c.key)), draft);
+  assert.match(c.status.textContent, /Unsaved draft found/);
+});
+
+test('clearing a draft cancels queued autosave and pagehide cannot recreate it', () => {
+  const c = editorClient({ content: 'unsaved text' });
+  c.editor.dispatch('input');
+  c.clear.dispatch('click');
+  c.flush();
+  c.events.get('pagehide')();
+  assert.equal(c.storage.has(c.key), false);
+  c.editor.value = 'new work';
+  c.editor.dispatch('input');
+  c.flush();
+  assert.equal(JSON.parse(c.storage.get(c.key)).content, 'new work');
+});
+
+test('filename/settings changes schedule autosave and back navigation re-enables it', () => {
+  const c = editorClient({ content: 'draft' });
+  c.filename.value = 'renamed.txt';
+  c.form.dispatch('input');
+  c.form.dispatch('submit');
+  assert.equal(JSON.parse(c.storage.get(c.key)).title, 'renamed.txt');
+  c.events.get('pageshow')();
+  c.editor.value = 'after going back';
+  c.editor.dispatch('input');
+  c.flush();
+  assert.equal(JSON.parse(c.storage.get(c.key)).content, 'after going back');
+});
+
+test('optional thumbnails use a native disclosure and existing images/errors stay visible', () => {
+  for (const variant of ['empty', 'image', 'errors']) {
+    const page = String(editorPage({
+      theme: 'light', user: null, path: '/', mode: 'create', maxBytes: 1024,
+      values: { title: 'untitled.txt', content: '', language: 'auto', font: 'mono', font_size: 14,
+        expiration: '1w', thumbnail_url: variant === 'image' ? 'https://example.com/image.png' : '' },
+      errors: variant === 'errors' ? ['Invalid image URL'] : [],
+    }));
+    const disclosure = page.match(/<details class="thumbnail-options"[^>]*>/)?.[0];
+    assert.ok(disclosure);
+    assert.equal(disclosure.includes('open'), variant !== 'empty');
+    assert.match(page, /data-import-button hidden/);
+    assert.match(page, /data-editor-wrap aria-pressed="false" hidden/);
+    assert.match(page, /Anyone with the link can see the thumbnail/);
+  }
 });
