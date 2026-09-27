@@ -41,6 +41,7 @@ import {
 import { addLineAnchors, renderCode } from '../lib/highlight.js';
 import {
   safeThumbnailUrl,
+  uploadProviders,
   uploadThumbnail,
   uploadsEnabled,
   validateThumbnailUrl,
@@ -94,6 +95,19 @@ export function maxBytesFor(user) {
 
 function pageCtx(ctx) {
   return { theme: ctx.theme, user: ctx.user, path: ctx.url.pathname };
+}
+
+/**
+ * Editor options for the thumbnail field: whether uploading is on at all, and
+ * which public hosts an upload may land on (with how long each keeps a file),
+ * so the help text can tell the author where their picture goes.
+ * @param {any} env
+ */
+function thumbnailUploadOptions(env) {
+  return {
+    uploads: uploadsEnabled(env),
+    uploadHosts: uploadProviders(env).map((provider) => ({ label: provider.label, retention: provider.retention })),
+  };
 }
 
 /**
@@ -235,7 +249,7 @@ export async function home(ctx) {
       thumbnail_url: '',
     },
     maxBytes: maxBytesFor(ctx.user),
-    uploads: uploadsEnabled(ctx.env),
+    ...thumbnailUploadOptions(ctx.env),
   });
   return htmlResponse(body, 200, {}, { cache: 'no-store' });
 }
@@ -272,7 +286,7 @@ export async function create(ctx) {
       },
       errors: input.errors,
       maxBytes: maxBytesFor(ctx.user),
-      uploads: uploadsEnabled(ctx.env),
+      ...thumbnailUploadOptions(ctx.env),
     });
     return htmlResponse(body, 400);
   }
@@ -544,7 +558,7 @@ export async function forkForm(ctx, params) {
       ? `This was a one-time paste (${oneTime}) and has now been consumed — the copy you save is the only copy left.`
       : null,
     maxBytes: maxBytesFor(ctx.user),
-    uploads: uploadsEnabled(ctx.env),
+    ...thumbnailUploadOptions(ctx.env),
   });
   return htmlResponse(body, 200, {}, { noindex: true });
 }
@@ -577,7 +591,7 @@ export async function editForm(ctx, params) {
       had_thumbnail: Boolean(safeThumbnailUrl(paste.thumbnail_url, ctx.env)),
     },
     maxBytes: maxBytesFor(ctx.user),
-    uploads: uploadsEnabled(ctx.env),
+    ...thumbnailUploadOptions(ctx.env),
   });
   return htmlResponse(body, 200, {}, { noindex: true });
 }
@@ -619,7 +633,7 @@ export async function editSave(ctx, params) {
       },
       errors: input.errors,
       maxBytes: maxBytesFor(ctx.user),
-      uploads: uploadsEnabled(ctx.env),
+      ...thumbnailUploadOptions(ctx.env),
     });
     return htmlResponse(body, 400, {}, { noindex: true });
   }

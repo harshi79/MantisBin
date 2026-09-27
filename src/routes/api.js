@@ -64,7 +64,7 @@ import {
   validateTitle,
 } from '../lib/validate.js';
 import { createPaste, deletePaste, getPaste, listUserPastes, updatePaste } from '../lib/pastes.js';
-import { allowedThumbnailHosts, safeThumbnailUrl, uploadProvider, uploadsEnabled, validateThumbnailUrl } from '../lib/thumbnail.js';
+import { allowedThumbnailHosts, safeThumbnailUrl, uploadProvider, uploadProviders, uploadsEnabled, validateThumbnailUrl } from '../lib/thumbnail.js';
 import { maxBytesFor } from './web.js';
 
 /** @typedef {import('../app.js').Ctx} Ctx */
@@ -196,8 +196,13 @@ export async function meta(ctx) {
       allowedHosts: allowedThumbnailHosts(ctx.env),
       /** Whether `POST /p/thumbnail` can forward image bytes on this instance. */
       uploads: uploadsEnabled(ctx.env),
-      /** Which back end `POST /p/thumbnail` forwards to (`catbox`, or null when off). */
+      /**
+       * The back end an upload is attempted on first (`catbox`, or null when
+       * uploading is off), and the whole chain in the order it is tried — the
+       * fallback exists because catbox refuses some Worker IPs outright.
+       */
       provider: uploadProvider(ctx.env),
+      providers: uploadProviders(ctx.env).map((entry) => entry.id),
       /** A thumbnail is public even on a protected or one-time paste. */
       public: true,
     },

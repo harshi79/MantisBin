@@ -13,11 +13,22 @@ TURSO_AUTH_TOKEN="your-turso-auth-token"
 APP_SECRET="change-me-to-a-long-random-string"
 
 # --- Paste thumbnails (all optional) ---------------------------------------
-# MantisBin never stores image bytes: one image is forwarded to catbox.moe and
-# only the returned URL is saved. A thumbnail is PUBLIC — it stays visible on a
-# password-protected or burn-after-reading paste — so the editor warns authors
-# not to put anything private in one. Authors can also paste ANY https image
-# URL by hand (any host); uploads always go to catbox.
+# MantisBin never stores image bytes: one image is forwarded to a public image
+# host and only the returned URL is saved. A thumbnail is PUBLIC — it stays
+# visible on a password-protected or burn-after-reading paste — so the editor
+# warns authors not to put anything private in one. Authors can also paste ANY
+# https image URL by hand (any host).
+#
+# Upload hosts, tried in order (comma or space separated). Default:
+#   catbox,nullpointer
+#     catbox      — catbox.moe. Keeps files indefinitely.
+#     nullpointer — 0x0.st. Anonymous, no key, no setup; keeps files for 30 days
+#                   to a year. This is the fallback that keeps uploading working
+#                   when catbox refuses the Worker's datacenter IP (catbox then
+#                   answers "Invalid Uploader").
+# Narrow it to a single host with e.g. THUMBNAIL_PROVIDERS="catbox"; unknown
+# ids are ignored.
+# THUMBNAIL_PROVIDERS="catbox,nullpointer"
 #
 # catbox.moe — add a userhash so uploads are accepted from the Worker's
 # datacenter IPs (catbox filters anonymous datacenter traffic) and are deletable

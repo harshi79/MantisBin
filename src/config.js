@@ -48,10 +48,12 @@ export const LIMITS = {
  * a URL — the bytes live on a third-party image host — and the picture is shown
  * on the paste page, in listings and as the `og:image` link preview.
  *
- * Uploads always go to catbox.moe (see lib/thumbnail.js). Add a
- * `CATBOX_USERHASH` in the dashboard so uploads are accepted (and deletable
- * from that account); with nothing set, uploads are anonymous. You may also
- * paste any `https:` image URL by hand — a link on any host is accepted.
+ * Uploads are forwarded to a public image host (catbox.moe, with 0x0.st as the
+ * fallback for when catbox refuses the Worker's datacenter IP) — see
+ * lib/thumbnail.js. Add a `CATBOX_USERHASH` in the dashboard to authenticate
+ * catbox uploads (and make them deletable from that account); with nothing set,
+ * uploads are anonymous. You may also paste any `https:` image URL by hand — a
+ * link on any host is accepted.
  *
  * Because an image host serves the picture to anyone who has the link, a
  * thumbnail is PUBLIC even when the paste itself is password-protected or burns
@@ -80,26 +82,59 @@ export const THUMBNAIL = {
  * A hand-typed thumbnail URL may point at ANY `https:` host — MantisBin does
  * not restrict which image host you link to. These entries are only the hosts
  * listed *by default* in the page `img-src` (see lib/http.js) so the built-in
- * upload target renders without extra configuration; operators can add more
+ * upload targets render without extra configuration; operators can add more
  * with the `THUMBNAIL_HOSTS` variable. Because arbitrary `https:` image URLs
  * are allowed, `img-src` is widened to `https:` as well — see lib/http.js.
  */
-export const THUMBNAIL_DEFAULT_HOSTS = ['files.catbox.moe'];
+export const THUMBNAIL_DEFAULT_HOSTS = ['files.catbox.moe', '0x0.st'];
 
 /**
- * Upload back end for `POST /p/thumbnail`: catbox.moe only.
+ * Upload back ends for `POST /p/thumbnail`, tried in this order.
  *
- *   catbox — `POST https://catbox.moe/user/api.php`. Add a `CATBOX_USERHASH`
- *            in the dashboard so uploads are accepted from the Worker's
- *            datacenter IPs (and deletable from that account); without it,
- *            uploads are anonymous.
+ *   catbox      — `POST https://catbox.moe/user/api.php`. Permanent storage. A
+ *                 `CATBOX_USERHASH` (secret) authenticates the upload so catbox
+ *                 accepts it from the Worker's datacenter IPs and lets you
+ *                 delete it later from your account; without it the upload is
+ *                 anonymous and may be refused outright (catbox answers `200 OK`
+ *                 with the sentence `Invalid Uploader` when it filters that
+ *                 traffic).
+ *   nullpointer — `POST https://0x0.st`. Anonymous, no key, nothing to
+ *                 configure, so it is the fallback that keeps uploading working
+ *                 when catbox refuses a Worker IP. Files live between 30 days
+ *                 and a year (smaller files live longer).
  *
- * MantisBin never stores image bytes: the Worker forwards them to catbox once
- * and keeps only the returned link. Set `THUMBNAIL_UPLOADS="off"` to disable
- * uploading entirely — the editor still accepts a pasted image URL.
+ * MantisBin never stores image bytes: the Worker forwards them once per
+ * provider — at most one request each, never a retry — and keeps only the
+ * returned link. `THUMBNAIL_PROVIDERS` (comma or space separated) reorders or
+ * narrows the chain, and `THUMBNAIL_UPLOADS="off"` disables uploading entirely
+ * (the editor still accepts a pasted image URL).
  */
 export const THUMBNAIL_PROVIDERS = [
-  { id: 'catbox', label: 'catbox.moe', endpoint: 'https://catbox.moe/user/api.php' },
+  {
+    id: 'catbox',
+    label: 'catbox.moe',
+    endpoint: 'https://catbox.moe/user/api.php',
+    /** Multipart field the bytes go in. */
+    fileField: 'fileToUpload',
+    /** Static multipart fields this host expects. */
+    fields: { reqtype: 'fileupload' },
+    /** Where an account credential goes, if the operator configured one. */
+    userhashField: 'userhash',
+    /** How long the host keeps an uploaded file — shown to authors. */
+    retention: 'keeps uploads indefinitely',
+  },
+  {
+    id: 'nullpointer',
+    label: '0x0.st',
+    endpoint: 'https://0x0.st',
+    fileField: 'file',
+    // An empty `secret` asks 0x0.st for a longer, hard-to-guess URL instead of
+    // the short default one — the thumbnail is public either way, and this at
+    // least keeps it out of anyone's enumeration.
+    fields: { secret: '' },
+    userhashField: null,
+    retention: 'keeps files for 30 days to a year',
+  },
 ];
 
 /** Expiration presets. `seconds: 0` means "never". */
