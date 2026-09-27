@@ -578,7 +578,7 @@ test('a successful upload returns the host URL and nothing is stored server-side
     assert.deepEqual(await res.json(), { url: CATBOX });
     assert.equal(calls.length, 1, 'exactly one outbound request, never retried');
     assert.match(calls[0].url, /catbox\.moe/);
-    assert.equal(calls[0].redirect, 'error', 'a redirect could smuggle in another origin');
+    assert.equal(calls[0].redirect, 'manual', 'Workers reject "error"; redirects are refused manually');
     assert.equal(Number((await app.db.get('SELECT COUNT(*) AS n FROM pastes')).n), 0, 'uploading creates no paste');
   } finally {
     globalThis.fetch = realFetch;

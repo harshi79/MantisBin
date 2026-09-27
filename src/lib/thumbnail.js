@@ -299,18 +299,8 @@ export async function uploadThumbnail(blob, type, env) {
       if (error.retryAfter) result.retryAfter = error.retryAfter;
       return result;
     }
-    // With `redirect: 'error'` a redirect surfaces as a TypeError, not a
-    // response — name it, so a smuggled redirect and a dead host look different.
     const message = String(error?.message || '');
     const cause = String(error?.cause?.message || error?.cause || '');
-    if (/redirect/i.test(`${message} ${cause}`)) {
-      console.warn('[mantisbin] thumbnail upload failed', {
-        provider: 'catbox',
-        status: 502,
-        detail: cleanSnippet(message, 200) || 'upload redirect blocked',
-      });
-      return { ok: false, error: 'The image host redirected the upload unexpectedly. Try again, or paste an image URL instead.' };
-    }
     console.warn('[mantisbin] thumbnail upload failed', {
       provider: 'catbox',
       status: 502,
@@ -346,9 +336,17 @@ async function uploadToCatbox(blob, type, env) {
     method: 'POST',
     headers: { 'User-Agent': UPLOAD_USER_AGENT, Accept: 'text/plain,*/*' },
     body,
-    redirect: 'error',
+    // Workers reject `redirect: 'error'` with a TypeError before any request
+    // is sent, so use 'manual' and refuse 3xx responses ourselves.
+    redirect: 'manual',
     signal: timeoutSignal(UPLOAD_TIMEOUT_MS),
   });
+  if ((response.status >= 300 && response.status < 400) || response.type === 'opaqueredirect') {
+    throw new UpstreamError(
+      'The image host redirected the upload unexpectedly. Try again, or paste an image URL instead.',
+      { status: 502, detail: `catbox responded ${response.status} redirect to ${cleanSnippet(response.headers.get('location') || '', 200)}` },
+    );
+  }
   const text = (await response.text()).trim();
   if (!response.ok) throw httpFailure(response, text);
   // Catbox answers `200 OK` with an error sentence when it refuses an upload —
