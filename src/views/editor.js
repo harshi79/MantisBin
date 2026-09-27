@@ -30,6 +30,7 @@ function extensionHintPayload() {
  *   errors?: string[], okMessage?: string,
  *   maxBytes: number,
  *   uploads?: boolean,
+ *   uploadHosts?: { label: string, retention: string }[],
  * }} options
  */
 export function editorPage(options) {
@@ -49,6 +50,14 @@ export function editorPage(options) {
       ? 'A fresh copy, with a link of its own.'
       : 'Your text or code. One link to share it.';
   const visibility = values.visibility || DEFAULT_VISIBILITY;
+  // "catbox.moe, or 0x0.st as a fallback" — the author deserves to know which
+  // public host their picture is about to live on, and for how long.
+  const hosts = options.uploadHosts || [];
+  const hostNames = hosts.map((host) => host.label);
+  const whereUploadsGo = hostNames.length > 1
+    ? `${hostNames.slice(0, -1).join(', ')} — or ${hostNames[hostNames.length - 1]} as a fallback`
+    : hostNames[0] || '';
+  const howLongHostsKeep = hosts.map((host) => `${host.label} ${host.retention}`).join('; ');
 
   const body = html`
     <div class="workspace-head">
@@ -194,7 +203,7 @@ export function editorPage(options) {
               visible even on a password-protected or one-time paste, and it remains on that host after this paste
               expires or is deleted. Never put anything private in it.
               ${options.uploads
-                ? html`Choose an image to upload it to catbox.moe (resized to ${THUMBNAIL.width}×${THUMBNAIL.height} in your browser first), or paste any image URL — MantisBin stores only the link.`
+                ? html`Choose an image to upload it to ${whereUploadsGo} (resized to ${THUMBNAIL.width}×${THUMBNAIL.height} in your browser first), or paste any image URL — MantisBin stores only the link.${howLongHostsKeep ? html` ${howLongHostsKeep}.` : ''}`
                 : html`Paste any https image URL.`}
             </p>
             ${canRemoveThumbnail

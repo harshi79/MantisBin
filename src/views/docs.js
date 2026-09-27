@@ -222,7 +222,8 @@ curl -sS ${base}/api/pastes/a8Kx92Lm        # 404 — it is gone</code></pre>
       </div>
       <p>
         A <code>thumbnailUrl</code> may point at <b>any <code>https</code> image host</b> — uploads
-        land on <code>catbox.moe</code>, and you can also paste a link to an image anywhere else.
+        land on <code>catbox.moe</code> (with <code>0x0.st</code> as a fallback), and you can also
+        paste a link to an image anywhere else.
         Only the protocol is enforced: <code>http</code> URLs, <code>data:</code> payloads and URLs
         carrying credentials are rejected. Because arbitrary remote images are allowed, the page's
         <code>img-src</code> permits <code>https:</code> images generally, which is why the public
@@ -233,9 +234,11 @@ curl -sS ${base}/api/pastes/a8Kx92Lm        # 404 — it is gone</code></pre>
             <p>
               Send <code>multipart/form-data</code> with an <code>image</code> field
               (${THUMBNAIL.types.map((type) => type.replace('image/', '')).join(', ')}; up to
-              ${formatBytes(THUMBNAIL.maxBytes)}). The bytes are forwarded once to <code>catbox.moe</code>
-              and the JSON reply is just the link, which you then send as
-              <code>thumbnailUrl</code>. Uploading creates no paste and modifies nothing.
+              ${formatBytes(THUMBNAIL.maxBytes)}). The bytes are forwarded to <code>catbox.moe</code>,
+              and to <code>0x0.st</code> when catbox refuses the upload — catbox filters uploads from
+              datacenter IPs such as a Worker's, so a refusal is expected rather than exceptional. Each
+              host sees one request, never a retry, and the JSON reply is just the link, which you then
+              send as <code>thumbnailUrl</code>. Uploading creates no paste and modifies nothing.
             </p>
             <pre><code>curl -sS -X POST ${base}/p/thumbnail -F "image=@card.jpg"
 # {"url":"https://files.catbox.moe/ab12cd.jpg"}</code></pre>`

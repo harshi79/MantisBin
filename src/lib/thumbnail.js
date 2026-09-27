@@ -1,16 +1,16 @@
 /**
  * Optional paste thumbnails (2.4).
  *
- * MantisBin never stores image bytes. One small picture is uploaded to
- * catbox.moe, and the paste row keeps only the returned URL. This module owns
+ * MantisBin never stores image bytes. One small picture is uploaded to a public
+ * image host, and the paste row keeps only the returned URL. This module owns
  * the rules that make that safe:
  *
  *   1. **Any https host, but https only.** A stored thumbnail must be an
  *      `https:` URL (never `data:` bytes or plaintext `http:`), but it may point
- *      at any image host — uploads land on catbox, and authors can paste a link
- *      to an image anywhere else. Because arbitrary remote images are allowed,
- *      the page's `img-src` CSP is `https:` (see lib/http.js); the trade-off is
- *      deliberate and documented.
+ *      at any image host — uploads land on catbox.moe or 0x0.st, and authors can
+ *      paste a link to an image anywhere else. Because arbitrary remote images
+ *      are allowed, the page's `img-src` CSP is `https:` (see lib/http.js); the
+ *      trade-off is deliberate and documented.
  *   2. **Public by construction.** The image lives on a public host under a
  *      guessable-to-nobody but unauthenticated URL. It is therefore readable by
  *      anyone who has the link, *including for a password-protected or
@@ -21,15 +21,16 @@
  *      a paste removes the row (and therefore the link), but MantisBin cannot
  *      delete the file from a host it does not own — a one-time paste's picture
  *      is not one-time. The editor's warning is worded to cover that.
- *   3. **One outbound request, bounded.** Uploads are forwarded once to catbox,
- *      with a byte ceiling checked before the request is built, a timeout, and
- *      no redirects followed. Nothing is retried and nothing is cached.
+ *   3. **One outbound request per provider, bounded.** Each provider in the
+ *      chain gets a single request with a byte ceiling checked before it is
+ *      built, a timeout, and no redirects followed. Nothing is retried and
+ *      nothing is cached.
  *
  * Runtime-agnostic: `fetch`, `FormData` and `AbortSignal` only — the same code
  * runs in the Worker, the Node dev server and the tests.
  */
 
-import { THUMBNAIL, THUMBNAIL_DEFAULT_HOSTS } from '../config.js';
+import { THUMBNAIL, THUMBNAIL_DEFAULT_HOSTS, THUMBNAIL_PROVIDERS } from '../config.js';
 
 /** @typedef {{ ok: boolean, value?: string, error?: string, status?: number, retryAfter?: number }} Result */
 
@@ -37,10 +38,12 @@ import { THUMBNAIL, THUMBNAIL_DEFAULT_HOSTS } from '../config.js';
 const UPLOAD_TIMEOUT_MS = 20_000;
 
 /**
- * Identifies outbound uploads to catbox. Some hosts filter anonymous traffic
- * from datacenter IPs (which is what Cloudflare Workers egress from), so an
- * honest UA is the difference between "filtered as bulk slop" and a diagnosable
- * response — and it tells the host's operator who to contact.
+ * Identifies outbound uploads to the image hosts. Some hosts filter anonymous
+ * traffic from datacenter IPs (which is what Cloudflare Workers egress from),
+ * so an honest UA is the difference between "filtered as bulk slop" and a
+ * diagnosable response — and it tells the host's operator who to contact.
+ * 0x0.st asks client authors for exactly this, and to never masquerade as a
+ * browser, so the string names the program and its source.
  */
 const UPLOAD_USER_AGENT = 'MantisBin/thumbnail-upload (+https://github.com/harshi79/MantisBin)';
 
@@ -120,19 +123,59 @@ export function hasThumbnail(paste) {
 }
 
 /**
- * Which upload back end is configured, if any. Only catbox is supported; it is
- * on unless the operator sets `THUMBNAIL_UPLOADS="off"`.
+ * Which upload back ends are configured, in the order they are tried.
+ *
+ * The default chain is catbox.moe first and 0x0.st second. That order matters:
+ * catbox keeps a file indefinitely, while 0x0.st expires it, so the permanent
+ * host is always preferred and the fallback only ever sees the uploads catbox
+ * refused — which, from a Cloudflare Worker, is exactly the datacenter-IP
+ * filtering that answers `200 OK` with the sentence `Invalid Uploader`.
+ *
+ * `THUMBNAIL_PROVIDERS` (comma or space separated) narrows or reorders the
+ * chain — `"catbox"` restores single-host behaviour, `"nullpointer,catbox"`
+ * inverts it. An unknown id is ignored, and if none of the names are known the
+ * default chain is used, so a typo degrades to the documented default instead
+ * of quietly switching uploading off. `THUMBNAIL_UPLOADS="off"` is the switch
+ * that does that.
  * @param {any} env
- * @returns {'catbox' | null}
+ * @returns {typeof THUMBNAIL_PROVIDERS}
+ */
+export function uploadProviders(env) {
+  if (env?.THUMBNAIL_UPLOADS === 'off') return [];
+  const known = new Map(THUMBNAIL_PROVIDERS.map((provider) => [provider.id, provider]));
+  const wanted = String(env?.THUMBNAIL_PROVIDERS || '')
+    .split(/[\s,]+/)
+    .map((entry) => entry.trim().toLowerCase())
+    .filter(Boolean);
+  const order = wanted.length ? wanted : THUMBNAIL_PROVIDERS.map((provider) => provider.id);
+  /** @type {typeof THUMBNAIL_PROVIDERS} */
+  const chain = [];
+  for (const id of order) {
+    const provider = known.get(id);
+    // De-duplicated: repeating an id must not send the same bytes twice.
+    if (provider && !chain.includes(provider)) chain.push(provider);
+  }
+  return chain.length ? chain : THUMBNAIL_PROVIDERS;
+}
+
+/**
+ * The provider an upload is attempted on first, or `null` when uploading is
+ * off. Reported by `/api/meta` so a client can see the intended host.
+ * @param {any} env
+ * @returns {string | null}
  */
 export function uploadProvider(env) {
-  if (env?.THUMBNAIL_UPLOADS === 'off') return null;
-  return 'catbox';
+  return uploadProviders(env)[0]?.id ?? null;
 }
 
 /** Can this deployment accept image uploads at all? */
 export function uploadsEnabled(env) {
-  return uploadProvider(env) !== null;
+  return uploadProviders(env).length > 0;
+}
+
+/** Display names of the configured chain, in order (for the editor's help text). */
+export function uploadHostLabels(env) {
+  return uploadProviders(env).map((provider) => provider.label);
 }
 
 /**
@@ -233,12 +276,13 @@ function retryAfterOf(response) {
  * sanitized fragment attached for the operator.
  * @param {Response} response
  * @param {unknown} snippet raw upstream body, for context only
+ * @param {string} [providerId] which host answered, for the operator log
  */
-function httpFailure(response, snippet) {
+function httpFailure(response, snippet, providerId = 'catbox') {
   const status = response?.status || 502;
   const detail = messageFromUpstreamBody(snippet);
   const quoted = detail ? ` ("${detail}")` : '';
-  const logDetail = `catbox responded ${status}${cleanSnippet(snippet, 200) ? `: ${cleanSnippet(snippet, 200)}` : ''}`;
+  const logDetail = `${providerId} responded ${status}${cleanSnippet(snippet, 200) ? `: ${cleanSnippet(snippet, 200)}` : ''}`;
   if (status === 429) {
     return new UpstreamError(
       'The image host is rate-limiting uploads. Wait a minute and try again, or paste an image URL instead.',
@@ -260,14 +304,22 @@ function httpFailure(response, snippet) {
 }
 
 /**
- * Forward one image to catbox and return the URL it hands back.
+ * Forward one image through the configured provider chain and return the URL
+ * the first host that accepts it hands back.
  *
  * Never throws for a remote failure: the caller turns `{ ok: false }` into an
- * HTTP error with a readable message, because "catbox is down" is not a bug in
- * this paste. Most upstream failures are a 502; a 429 or 413 the host names
- * passes through with its own status (and `Retry-After`) so the reader can act
- * on it. The response URL is validated (https, no credentials) before it can
- * reach a page.
+ * HTTP error with a readable message, because "the image host is down" is not a
+ * bug in this paste. Most upstream failures are a 502; a 429 or 413 the host
+ * names passes through with its own status (and `Retry-After`) so the reader
+ * can act on it. The response URL is validated (https, no credentials) before
+ * it can reach a page.
+ *
+ * A refusal is not the end of the story: catbox answers `200 OK` with a
+ * sentence such as `Invalid Uploader` when it filters the Worker's datacenter
+ * IP, so the chain continues and the fallback host gets the same image. Only
+ * when *every* provider refuses does the upload fail — and then the reader sees
+ * the first provider's message, because that is the host this instance is
+ * configured around, while `wrangler tail` shows the whole chain.
  *
  * @param {Blob} blob raw image bytes (already validated)
  * @param {string} type validated MIME type
@@ -275,39 +327,52 @@ function httpFailure(response, snippet) {
  * @returns {Promise<Result>}
  */
 export async function uploadThumbnail(blob, type, env) {
-  if (!uploadsEnabled(env)) return { ok: false, error: 'Image uploads are not configured on this instance.' };
+  const chain = uploadProviders(env);
+  if (!chain.length) return { ok: false, error: 'Image uploads are not configured on this instance.' };
 
-  try {
-    const url = await uploadToCatbox(blob, type, env);
-    if (!url) return { ok: false, error: 'The image host did not return a link. Try again.' };
-    const check = validateThumbnailUrl(url, env);
-    if (!check.ok) {
-      return { ok: false, error: 'The image host returned an unexpected link, so it was discarded.' };
-    }
-    return check;
-  } catch (error) {
-    if (error?.name === 'TimeoutError' || error?.name === 'AbortError') {
-      return { ok: false, error: 'The image host timed out. Try again, or paste an image URL instead.' };
-    }
-    if (error instanceof UpstreamError) {
+  /** @type {Result | null} */
+  let firstFailure = null;
+  for (const [index, provider] of chain.entries()) {
+    try {
+      return { ok: true, value: await uploadToProvider(provider, blob, type, env) };
+    } catch (error) {
+      const failure = uploadFailure(error);
+      firstFailure ||= failure;
       console.warn('[mantisbin] thumbnail upload failed', {
-        provider: 'catbox',
-        status: error.status,
-        detail: error.detail || error.message,
+        provider: provider.id,
+        status: failure.status,
+        detail: failure.log,
+        // Naming the next hop turns a one-line failure into the whole story.
+        ...(index + 1 < chain.length ? { fellBackTo: chain[index + 1].id } : {}),
       });
-      const result = { ok: false, error: error.message, status: error.status };
-      if (error.retryAfter) result.retryAfter = error.retryAfter;
-      return result;
     }
-    const message = String(error?.message || '');
-    const cause = String(error?.cause?.message || error?.cause || '');
-    console.warn('[mantisbin] thumbnail upload failed', {
-      provider: 'catbox',
-      status: 502,
-      detail: cleanSnippet(`${message} ${cause}`, 200) || 'unreachable',
-    });
-    return { ok: false, error: 'The image host could not be reached. Try again, or paste an image URL instead.' };
   }
+  return firstFailure || { ok: false, error: 'The image host could not be reached. Try again, or paste an image URL instead.' };
+}
+
+/**
+ * Normalise anything a single upload attempt threw into the `{ ok: false }`
+ * the route answers with, plus the operator-facing half for the log.
+ * @param {any} error
+ * @returns {Result & { log: string }}
+ */
+function uploadFailure(error) {
+  if (error?.name === 'TimeoutError' || error?.name === 'AbortError') {
+    return { ok: false, error: 'The image host timed out. Try again, or paste an image URL instead.', status: 502, log: 'timed out' };
+  }
+  if (error instanceof UpstreamError) {
+    const result = { ok: false, error: error.message, status: error.status, log: error.detail || error.message };
+    if (error.retryAfter) result.retryAfter = error.retryAfter;
+    return result;
+  }
+  const message = String(error?.message || '');
+  const cause = String(error?.cause?.message || error?.cause || '');
+  return {
+    ok: false,
+    error: 'The image host could not be reached. Try again, or paste an image URL instead.',
+    status: 502,
+    log: cleanSnippet(`${message} ${cause}`, 200) || 'unreachable',
+  };
 }
 
 /** `AbortSignal.timeout` exists on Workers and Node 22; fall back just in case. */
@@ -321,18 +386,30 @@ function timeoutSignal(ms) {
 }
 
 /**
- * catbox.moe — `POST /user/api.php`, multipart, plain-text response that is the
- * URL itself. Anonymous unless the operator supplies `CATBOX_USERHASH` (which
- * makes uploads deletable from that account, and lets catbox accept traffic
- * from the Worker's datacenter IPs).
+ * Upload to one provider and return the URL it handed back, already validated.
+ *
+ * Each host has its own dialect — catbox wants `reqtype` (and a `userhash` when
+ * the operator configured one) with the bytes in `fileToUpload`, 0x0.st wants
+ * them in `file` — so `config.js` carries the field names and this stays
+ * generic. Both answer with the URL as plain text, and both answer `200 OK`
+ * with a sentence when they refuse, so a non-URL body is a refusal.
+ * @param {typeof THUMBNAIL_PROVIDERS[number]} provider
+ * @param {Blob} blob
+ * @param {string} type
+ * @param {any} env
+ * @returns {Promise<string>}
  */
-async function uploadToCatbox(blob, type, env) {
+async function uploadToProvider(provider, blob, type, env) {
   const body = new FormData();
-  body.append('reqtype', 'fileupload');
-  if (env.CATBOX_USERHASH) body.append('userhash', String(env.CATBOX_USERHASH));
-  body.append('fileToUpload', blob, uploadFilename(type));
+  for (const [field, value] of Object.entries(provider.fields || {})) {
+    body.append(field, value);
+  }
+  if (provider.userhashField && env?.CATBOX_USERHASH) {
+    body.append(provider.userhashField, String(env.CATBOX_USERHASH));
+  }
+  body.append(provider.fileField, blob, uploadFilename(type));
 
-  const response = await fetch('https://catbox.moe/user/api.php', {
+  const response = await fetch(provider.endpoint, {
     method: 'POST',
     headers: { 'User-Agent': UPLOAD_USER_AGENT, Accept: 'text/plain,*/*' },
     body,
@@ -344,22 +421,22 @@ async function uploadToCatbox(blob, type, env) {
   if ((response.status >= 300 && response.status < 400) || response.type === 'opaqueredirect') {
     throw new UpstreamError(
       'The image host redirected the upload unexpectedly. Try again, or paste an image URL instead.',
-      { status: 502, detail: `catbox responded ${response.status} redirect to ${cleanSnippet(response.headers.get('location') || '', 200)}` },
+      { status: 502, detail: `${provider.id} responded ${response.status} redirect to ${cleanSnippet(response.headers.get('location') || '', 200)}` },
     );
   }
   const text = (await response.text()).trim();
-  if (!response.ok) throw httpFailure(response, text);
-  // Catbox answers `200 OK` with an error sentence when it refuses an upload —
-  // for example when it filters traffic from datacenter IPs, which is what
-  // Workers egress from. Surface the sentence when it is plain text; a block
-  // page stays in the log only.
+  if (!response.ok) throw httpFailure(response, text, provider.id);
+  // Both hosts answer `200 OK` with an error sentence when they refuse an
+  // upload — catbox does it when it filters traffic from datacenter IPs, which
+  // is what Workers egress from. Surface the sentence when it is plain text; a
+  // block page stays in the log only.
   if (!/^https:\/\//i.test(text)) {
     const detail = messageFromUpstreamBody(text);
     throw new UpstreamError(
       detail
         ? `The image host refused the upload ("${detail}"). Try again, or paste an image URL instead.`
         : 'The image host refused the upload. Try again, or paste an image URL instead.',
-      { status: 502, detail: `catbox refused the upload: ${cleanSnippet(text, 200) || '(empty response)'}` },
+      { status: 502, detail: `${provider.id} refused the upload: ${cleanSnippet(text, 200) || '(empty response)'}` },
     );
   }
   return text;

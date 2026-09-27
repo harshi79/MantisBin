@@ -23,7 +23,9 @@ import {
   hasThumbnail,
   safeThumbnailUrl,
   uploadFilename,
+  uploadHostLabels,
   uploadProvider,
+  uploadProviders,
   uploadsEnabled,
   validateThumbnailUrl,
   validateUpload,
@@ -32,6 +34,10 @@ import { contentSecurityPolicy } from '../src/lib/http.js';
 import { THUMBNAIL } from '../src/config.js';
 
 const CATBOX = 'https://files.catbox.moe/ab12cd.jpg';
+const CATBOX_API = 'https://catbox.moe/user/api.php';
+// 0x0.st is the fallback host: anonymous, no key, nothing to configure.
+const NULLPOINTER = 'https://0x0.st/xy98zw.png';
+const NULLPOINTER_API = 'https://0x0.st';
 // An image on some other host: hand-typed links may point anywhere on https.
 const OTHER_HOST = 'https://cdn.example.com/thumbnail/xyz789.webp';
 
@@ -221,8 +227,23 @@ test('the editor states that a thumbnail is public, and works without JavaScript
     // Still exactly one submit button — the upload control is a label + input.
     assert.equal((workspace.match(/type="submit"/g) || []).length, 1);
     assert.match(workspace, /data-thumbnail-input/);
+    // The author is told where the picture goes, and for how long each host
+    // keeps it — both hosts of the default chain, named.
+    assert.match(workspace, /upload it to catbox\.moe — or 0x0\.st as a fallback/);
+    assert.match(workspace, /catbox\.moe keeps uploads indefinitely/);
+    assert.match(workspace, /0x0\.st keeps files for 30 days to a year/);
   } finally {
     await app.close();
+  }
+
+  // A narrowed chain names only the host that is actually configured.
+  const single = await createApp({ env: { THUMBNAIL_PROVIDERS: 'catbox' } });
+  try {
+    const page = await (await single.request('/')).text();
+    assert.match(page, /upload it to catbox\.moe /);
+    assert.doesNotMatch(page, /0x0\.st/);
+  } finally {
+    await single.close();
   }
 });
 
@@ -477,10 +498,38 @@ test('uploads are validated before a single byte leaves the Worker', () => {
   assert.equal(uploadFilename('image/jpeg'), 'thumbnail.jpg');
 });
 
-test('uploads go to catbox by default and can be switched off', () => {
+test('uploads go to catbox first, with 0x0.st behind it, and can be narrowed', () => {
+  assert.deepEqual(
+    uploadProviders({}).map((provider) => provider.id),
+    ['catbox', 'nullpointer'],
+  );
   assert.equal(uploadProvider({}), 'catbox');
   assert.equal(uploadProvider({ CATBOX_USERHASH: 'abc' }), 'catbox');
   assert.equal(uploadsEnabled({}), true);
+  assert.deepEqual(uploadHostLabels({}), ['catbox.moe', '0x0.st']);
+
+  // One host only: no fallback, exactly the old behaviour.
+  assert.deepEqual(
+    uploadProviders({ THUMBNAIL_PROVIDERS: 'catbox' }).map((provider) => provider.id),
+    ['catbox'],
+  );
+  // …and the order is the operator's to choose.
+  assert.deepEqual(
+    uploadProviders({ THUMBNAIL_PROVIDERS: 'nullpointer, catbox' }).map((provider) => provider.id),
+    ['nullpointer', 'catbox'],
+  );
+  // Repeating an id must not send the same bytes twice.
+  assert.deepEqual(
+    uploadProviders({ THUMBNAIL_PROVIDERS: 'catbox catbox' }).map((provider) => provider.id),
+    ['catbox'],
+  );
+  // A typo degrades to the documented default rather than switching uploads off.
+  assert.deepEqual(
+    uploadProviders({ THUMBNAIL_PROVIDERS: 'catbx' }).map((provider) => provider.id),
+    ['catbox', 'nullpointer'],
+  );
+  assert.equal(uploadsEnabled({ THUMBNAIL_PROVIDERS: 'catbx' }), true);
+
   assert.equal(uploadProvider({ THUMBNAIL_UPLOADS: 'off' }), null);
   assert.equal(uploadsEnabled({ THUMBNAIL_UPLOADS: 'off' }), false);
 });
@@ -716,6 +765,127 @@ test('upstream rate limiting passes through as a 429 with Retry-After', async ()
   }
 });
 
+test('a refused upload falls back to the next host instead of failing', async () => {
+  const app = await createApp();
+  const realFetch = globalThis.fetch;
+  /** @type {string[]} */
+  const calls = [];
+  globalThis.fetch = async (url) => {
+    const target = String(url);
+    calls.push(target);
+    // Exactly what catbox answers from a Cloudflare Worker IP: `200 OK` with a
+    // sentence, because it filters uploads from datacenter addresses.
+    if (target === CATBOX_API) return new Response('Invalid Uploader', { status: 200 });
+    return new Response(NULLPOINTER, { status: 200 });
+  };
+  try {
+    const res = await uploadImage(app);
+    assert.equal(res.status, 201);
+    assert.deepEqual(await res.json(), { url: NULLPOINTER });
+    assert.deepEqual(calls, [CATBOX_API, NULLPOINTER_API], 'catbox first, then the fallback');
+  } finally {
+    globalThis.fetch = realFetch;
+    await app.close();
+  }
+});
+
+test('the fallback host receives the image in the fields it expects', async () => {
+  const app = await createApp();
+  const realFetch = globalThis.fetch;
+  /** @type {any} */
+  let seen = null;
+  globalThis.fetch = async (url, init) => {
+    if (String(url) === CATBOX_API) return new Response('Invalid Uploader', { status: 200 });
+    seen = {
+      url: String(url),
+      method: init?.method,
+      redirect: init?.redirect,
+      headers: init?.headers,
+      bodyText: await new Response(init?.body).text().catch(() => ''),
+    };
+    return new Response(NULLPOINTER, { status: 200 });
+  };
+  try {
+    assert.equal((await uploadImage(app)).status, 201);
+    assert.equal(seen.url, NULLPOINTER_API);
+    assert.equal(seen.method, 'POST');
+    assert.equal(seen.redirect, 'manual');
+    // 0x0.st wants the bytes in `file`, and an empty `secret` buys the longer,
+    // hard-to-guess URL — a public thumbnail should not be enumerable.
+    assert.match(seen.bodyText, /name="file"/);
+    assert.match(seen.bodyText, /name="secret"/);
+    assert.match(seen.bodyText, /thumbnail\.jpg/);
+    assert.match(String(seen.headers?.['User-Agent'] || ''), /MantisBin/);
+  } finally {
+    globalThis.fetch = realFetch;
+    await app.close();
+  }
+});
+
+test('a host that cannot be reached does not stop the chain', async () => {
+  const app = await createApp();
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (url) => {
+    if (String(url) === CATBOX_API) throw new Error('ECONNREFUSED');
+    return new Response(NULLPOINTER, { status: 200 });
+  };
+  try {
+    const res = await uploadImage(app);
+    assert.equal(res.status, 201);
+    assert.deepEqual(await res.json(), { url: NULLPOINTER });
+  } finally {
+    globalThis.fetch = realFetch;
+    await app.close();
+  }
+});
+
+test('when every host refuses, the first host\'s message is what the reader sees', async () => {
+  const app = await createApp();
+  const realFetch = globalThis.fetch;
+  const realWarn = console.warn;
+  /** @type {any[]} */
+  const warnings = [];
+  console.warn = (...args) => warnings.push(args);
+  globalThis.fetch = async (url) =>
+    new Response(String(url).includes('catbox') ? 'Invalid Uploader' : 'nope', { status: 200 });
+  try {
+    const res = await uploadImage(app);
+    assert.equal(res.status, 502);
+    const body = await res.json();
+    assert.match(body.error, /refused the upload/);
+    assert.match(body.error, /Invalid Uploader/, 'the configured host\'s reason survives');
+    assert.match(body.error, /paste an image URL instead/);
+    // The operator log carries the whole chain, including the hop.
+    const log = JSON.stringify(warnings);
+    assert.match(log, /"provider":"catbox"/);
+    assert.match(log, /"fellBackTo":"nullpointer"/);
+    assert.match(log, /"provider":"nullpointer"/);
+  } finally {
+    globalThis.fetch = realFetch;
+    console.warn = realWarn;
+    await app.close();
+  }
+});
+
+test('a narrowed chain never falls back', async () => {
+  const app = await createApp({ env: { THUMBNAIL_PROVIDERS: 'catbox' } });
+  const realFetch = globalThis.fetch;
+  /** @type {string[]} */
+  const calls = [];
+  globalThis.fetch = async (url) => {
+    calls.push(String(url));
+    return new Response('Invalid Uploader', { status: 200 });
+  };
+  try {
+    const res = await uploadImage(app);
+    assert.equal(res.status, 502);
+    assert.deepEqual(calls, [CATBOX_API], 'one host configured, one request made');
+  } finally {
+    globalThis.fetch = realFetch;
+    await app.close();
+  }
+});
+
 test('an upstream "too large" passes through as a 413', async () => {
   const app = await createApp();
   const realFetch = globalThis.fetch;
@@ -751,11 +921,12 @@ test('uploads identify themselves to the image host', async () => {
   }
 });
 
-test('/api/meta names the live upload provider', async () => {
+test('/api/meta names the live upload provider and its chain', async () => {
   const plain = await createApp();
   try {
     const meta = await (await plain.request('/api/meta')).json();
     assert.equal(meta.thumbnail.provider, 'catbox');
+    assert.deepEqual(meta.thumbnail.providers, ['catbox', 'nullpointer']);
     assert.equal(meta.thumbnail.uploads, true);
   } finally {
     await plain.close();
@@ -764,6 +935,7 @@ test('/api/meta names the live upload provider', async () => {
   try {
     const meta = await (await off.request('/api/meta')).json();
     assert.equal(meta.thumbnail.provider, null);
+    assert.deepEqual(meta.thumbnail.providers, []);
     assert.equal(meta.thumbnail.uploads, false);
   } finally {
     await off.close();
