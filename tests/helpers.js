@@ -79,7 +79,10 @@ export async function createApp(options = {}) {
 export function form(values) {
   const params = new URLSearchParams();
   for (const [key, value] of Object.entries(values)) {
-    if (value !== undefined && value !== null) params.set(key, String(value));
+    if (value === undefined || value === null) continue;
+    // An array means the field repeats (the profile customiser's link rows).
+    if (Array.isArray(value)) for (const entry of value) params.append(key, String(entry));
+    else params.set(key, String(value));
   }
   return params.toString();
 }

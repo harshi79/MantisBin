@@ -1,5 +1,5 @@
 /** Shared page chrome. No external fonts, scripts or icon requests. */
-import { SITE } from '../config.js';
+import { SITE, SOCIAL } from '../config.js';
 import { inlineMark } from '../assets/mark.js';
 import { icon } from '../assets/icons.js';
 import { html } from '../lib/html.js';
@@ -9,15 +9,16 @@ import { html } from '../lib/html.js';
  *   title: string,
  *   description?: string,
  *   theme?: string,
- *   user?: { id: number, username: string } | null,
+ *   user?: { id: number, username: string, unread?: number } | null,
  *   noindex?: boolean,
  *   active?: string,
  *   path?: string,
  *   image?: string | null,
+ *   styles?: string[],
  *   body: import('../lib/html.js').SafeHtml,
  * }} options
  */
-export function layout({ title, description, theme = 'auto', user = null, noindex = false, active = '', path = '/', image = null, body }) {
+export function layout({ title, description, theme = 'auto', user = null, noindex = false, active = '', path = '/', image = null, styles = [], body }) {
   const nextTheme = theme === 'light' ? 'dark' : theme === 'dark' ? 'ocean' : theme === 'ocean' ? 'auto' : 'light';
   const nextLabel = nextTheme === 'auto' ? 'Auto' : nextTheme === 'light' ? 'Light' : nextTheme === 'dark' ? 'Dark' : 'Ocean';
   return html`<!doctype html>
@@ -33,7 +34,8 @@ ${noindex ? html`<meta name="robots" content="noindex, nofollow">` : ''}
 <meta name="theme-color" content="#f4f6f3" media="(prefers-color-scheme: light)">
 <link rel="icon" type="image/svg+xml" href="/favicon.svg">
 <link rel="stylesheet" href="/app.css">
-<meta property="og:site_name" content="${SITE.name}">
+${styles.map((href) => html`<link rel="stylesheet" href="${href}">
+`)}<meta property="og:site_name" content="${SITE.name}">
 <meta property="og:title" content="${title}">
 ${image
   ? html`<meta property="og:image" content="${image}">
@@ -57,7 +59,14 @@ ${image
       </div>
       <div class="nav-account">
         ${user
-          ? html`<a class="nav-link nav-settings" href="/me/settings" ${active === 'settings' ? html`aria-current="page"` : ''}>Settings</a>
+          ? html`<a class="nav-link nav-bell${active === 'notifications' ? ' is-active' : ''}" href="/notifications"
+                data-unread-bell data-unread-endpoint="/api/notifications/unread"
+                title="${user.unread ? `${user.unread} unread notification${user.unread === 1 ? '' : 's'}` : 'Notifications'}"
+                aria-label="${user.unread ? `${user.unread} unread notifications` : 'Notifications'}">
+                ${icon('bell')}
+                <span class="nav-badge" aria-hidden="true" data-unread-badge data-max="${SOCIAL.unreadBadgeMax}" ${user.unread ? '' : 'hidden'}>${user.unread > SOCIAL.unreadBadgeMax ? `${SOCIAL.unreadBadgeMax}+` : user.unread || 0}</span>
+              </a>
+              <a class="nav-link nav-settings" href="/me/settings" ${active === 'settings' ? html`aria-current="page"` : ''}>Settings</a>
               <a class="nav-profile" href="/u/${user.username}" title="View your public profile">
                 <img class="avatar avatar-nav" src="/u/${user.username}/avatar.svg" alt="" width="26" height="26" loading="lazy">
                 <span class="nav-user">${user.username}</span>

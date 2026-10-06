@@ -4,8 +4,9 @@ import { icon } from '../assets/icons.js';
 import { burnLabel } from '../lib/burn.js';
 import { filenameExtension } from '../lib/detect.js';
 import { html, raw } from '../lib/html.js';
+import { formattingSummary } from '../lib/formatting.js';
 import { downloadFilename, formatBytes, formatDateTime, formatNumber, relativeTime } from '../lib/validate.js';
-import { layout } from './layout.js';
+import { alertBox, layout } from './layout.js';
 
 function languageLabel(id) {
   return LANGUAGES.find((lang) => lang.id === id)?.label || 'Plain text';
@@ -17,8 +18,14 @@ function languageLabel(id) {
  *   paste: any,
  *   contentHtml: string,
  *   thumbnailUrl?: string | null,
+ *   formatting?: { v: number, lines: any[] },
  *   highlighted: boolean,
  *   lineNumbers?: boolean,
+ *   social?: {
+ *     canReact: boolean, canBookmark: boolean, bookmarked: boolean,
+ *     mine: string | null,
+ *     reactions: Array<{ emoji: string, label: string, count: number }>,
+ *   } | null,
  *   share?: boolean,
  *   absoluteUrl: string,
  *   isOwner: boolean,
@@ -68,9 +75,59 @@ export function pastePage(options) {
       <span>${formatNumber(paste.views)} ${paste.views === 1 ? 'view' : 'views'}</span>
       <span>${expired ? html`expires ${relativeTime(paste.expires_at)}` : 'never expires'}</span>
       <span>${paste.visibility === 'public' ? 'public' : 'unlisted'}</span>
+      ${formattingSummary(options.formatting) ? html`<span class="badge">${formattingSummary(options.formatting)}</span>` : ''}
       ${paste.password_hash ? html`<span class="badge">password-protected</span>` : ''}
       ${burnLabel(paste) ? html`<span class="badge badge-warn">${burnLabel(paste)}</span>` : ''}
     </div>
+    ${options.social
+      ? html`<div class="paste-social">
+          ${options.social.canReact
+            ? html`<form class="reactions" action="/p/${paste.id}/react" method="post" aria-label="React to this paste">
+                <input type="hidden" name="next" value="/p/${paste.id}">
+                ${options.social.reactions.map(
+                  (entry) => html`<button class="reaction-chip${options.social.mine === entry.emoji ? ' is-mine' : ''}"
+                      type="submit" name="reaction" value="${entry.emoji}" title="${entry.label}"
+                      aria-pressed="${options.social.mine === entry.emoji ? 'true' : 'false'}">
+                    <span class="reaction-glyph" aria-hidden="true">${entry.emoji}</span>
+                    <span class="reaction-count">${formatNumber(entry.count)}</span>
+                    <span class="sr-only">${entry.label}</span>
+                  </button>`,
+                )}
+                ${options.social.mine
+                  ? html`<button class="reaction-chip reaction-clear" type="submit" name="reaction" value="" title="Remove your reaction">
+                      ${icon('trash')}<span class="sr-only">Remove your reaction</span>
+                    </button>`
+                  : ''}
+              </form>`
+            : options.social.reactions.some((entry) => entry.count > 0)
+              ? html`<div class="reactions reactions-static" aria-label="Reactions">
+                  ${options.social.reactions
+                    .filter((entry) => entry.count > 0)
+                    .map(
+                      (entry) => html`<span class="reaction-chip" title="${entry.label}">
+                        <span class="reaction-glyph" aria-hidden="true">${entry.emoji}</span>
+                        <span class="reaction-count">${formatNumber(entry.count)}</span>
+                        <span class="sr-only">${entry.label}</span>
+                      </span>`,
+                    )}
+                </div>`
+              : ''}
+          ${options.social.canBookmark
+            ? html`<form class="bookmark-form" action="/p/${paste.id}/bookmark" method="post">
+                <input type="hidden" name="saved" value="${options.social.bookmarked ? '0' : '1'}">
+                <input type="hidden" name="next" value="/p/${paste.id}">
+                <button class="btn btn-sm${options.social.bookmarked ? ' btn-primary' : ' btn-ghost'}" type="submit">
+                  ${icon('bookmark')}<span>${options.social.bookmarked ? 'Saved' : 'Save'}</span>
+                </button>
+              </form>`
+            : ''}
+          ${options.social.canReact || options.social.canBookmark
+            ? ''
+            : options.user
+              ? html`<span class="muted small">${icon('lock')} Reactions are for public pastes; bookmarks open with the paste.</span>`
+              : html`<span class="muted small">${icon('lock')} <a href="/login?next=${encodeURIComponent(`/p/${paste.id}`)}">Sign in</a> to react or save this paste.</span>`}
+        </div>`
+      : ''}
     ${thumbnail
       ? html`<figure class="thumbnail-figure">
           <img class="thumbnail-image" src="${thumbnail}" alt="Thumbnail for ${paste.title}"
@@ -78,6 +135,7 @@ export function pastePage(options) {
           <figcaption class="muted small">Thumbnail — hosted publicly, visible to anyone with the link.</figcaption>
         </figure>`
       : ''}
+    ${options.notice ? alertBox([], options.notice) : ''}
     ${options.share
       ? html`<div class="alert alert-ok share-notice" role="status">
           <b>Your paste is ready.</b>

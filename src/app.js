@@ -11,6 +11,8 @@ import { errorPage } from './views/errors.js';
 import * as web from './routes/web.js';
 import * as api from './routes/api.js';
 import * as profile from './routes/profile.js';
+import * as social from './routes/social.js';
+import * as media from './routes/media.js';
 import * as admin from './routes/admin.js';
 
 /**
@@ -19,7 +21,7 @@ import * as admin from './routes/admin.js';
  * @property {URL} url
  * @property {any} env
  * @property {import('./db/turso.js').Db} db
- * @property {{ id: number, username: string } | null} user
+ * @property {{ id: number, username: string, unread?: number } | null} user
  * @property {Record<string, string>} cookies
  * @property {string} theme
  * @property {boolean} secure
@@ -51,7 +53,13 @@ const ROUTE_TABLE = [
   ['POST', '/admin/logout', admin.logout],
   ['GET', '/admin/pastes', admin.pastes],
   ['GET', '/admin/users', admin.users],
+  ['GET', '/admin/tags', admin.tags],
+  ['POST', '/admin/tags', admin.tagAction],
   ['GET', '/admin/audit', admin.audit],
+  ['GET', '/admin/stickers', admin.stickers],
+  ['POST', '/admin/stickers', admin.stickerAction],
+  ['GET', '/admin/broadcast', admin.broadcast],
+  ['POST', '/admin/broadcast', admin.broadcastSend],
   ['GET', '/admin/confirm', admin.confirm],
   ['POST', '/admin/action', admin.perform],
   ['GET', '/', web.home],
@@ -75,18 +83,33 @@ const ROUTE_TABLE = [
   ['GET', '/me', web.myPastes],
   ['POST', '/me/keys', web.createKey],
   ['POST', '/me/keys/revoke', web.revokeKey],
+  ['GET', '/me/profile', profile.editProfile],
+  ['POST', '/me/profile', profile.saveProfile],
+  ['POST', '/me/pastes/:id/pin', profile.togglePin],
   ['GET', '/me/settings', profile.settings],
   ['POST', '/me/password', profile.updatePassword],
   ['POST', '/me/sessions/revoke', profile.revoke],
   ['POST', '/me/delete', profile.removeAccount],
   ['GET', '/u/:username', profile.publicProfile],
+  ['POST', '/u/:username/follow', social.follow],
+  ['GET', '/u/:username/followers', social.followers],
+  ['GET', '/u/:username/following', social.following],
+  ['GET', '/notifications', social.notifications],
+  ['POST', '/notifications/read', social.readNotifications],
+  ['GET', '/me/bookmarks', social.bookmarks],
+  ['POST', '/p/:id/bookmark', social.toggleBookmark],
+  ['POST', '/p/:id/react', social.react],
   ['GET', '/u/:username/avatar.svg', profile.avatar],
+  ['GET', '/u/:username/theme.css', profile.themeStylesheet],
   ['GET', '/api/users/:username', profile.apiProfile],
   ['GET', '/docs', web.docs],
   ['GET', '/favicon.svg', web.favicon],
   ['GET', '/logo.svg', web.logo],
   ['GET', '/mark.svg', web.mark],
   ['GET', '/api/health', api.health],
+  ['GET', '/api/stickers', media.stickers],
+  ['GET', '/api/gifs', media.gifs],
+  ['GET', '/api/notifications/unread', social.unread],
   ['GET', '/api/meta', api.meta],
   ['POST', '/api/pastes', api.create],
   ['GET', '/api/pastes/mine', api.mine],
@@ -135,7 +158,7 @@ export async function handleRequest({ request, env, db }) {
     if (token && !url.pathname.match(/^\/admin(?:\/|$)/)) {
       const session = await resolveSession(db, token, now);
       if (session) {
-        ctx.user = { id: session.user.id, username: session.user.username };
+        ctx.user = { id: session.user.id, username: session.user.username, unread: session.unread };
         // Slide the session forward when it is getting old.
         if (session.expiresAt - now < SESSION_REFRESH_SECONDS) {
           const expiresAt = now + SESSION_TTL_SECONDS;

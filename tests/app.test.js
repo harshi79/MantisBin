@@ -228,12 +228,13 @@ test('view counter ignores repeat refreshes but counts distinct visitors', async
 test('registration validation: usernames and passwords', async () => {
   const app = await createApp();
   const bad = [
-    { username: 'abc', password: 'longenough1' }, // too short
-    { username: 'abcdefg', password: 'longenough1' }, // too long
-    { username: 'ab_cd', password: 'longenough1' },
+    { username: 'ab', password: 'longenough1' }, // shorter than 3
+    { username: 'a'.repeat(21), password: 'longenough1' }, // longer than 20
     { username: 'ab-cd', password: 'longenough1' },
     { username: 'ab.cd', password: 'longenough1' },
     { username: 'ab cd', password: 'longenough1' },
+    { username: 'ab@cd', password: 'longenough1' },
+    { username: 'admin', password: 'longenough1' }, // reserved
     { username: 'abcd', password: 'short1' }, // password too short
   ];
   for (const payload of bad) {
@@ -242,6 +243,11 @@ test('registration validation: usernames and passwords', async () => {
   }
   const ok = await registerUser(app, 'alice1');
   assert.equal(ok.status, 303);
+  // The merged rule also accepts the historic 4–6 shape untouched, plus the
+  // wider 3–20 form with underscores for new sign-ups.
+  assert.equal((await registerUser(app, 'ab_cd', 'longenough1', 'legacy')).status, 303);
+  assert.equal((await registerUser(app, 'x_9', 'longenough1', 'short3')).status, 303);
+  assert.equal((await registerUser(app, 'twenty_char_name_ok', 'longenough1', 'long20')).status, 303);
   assert.equal((await app.request('/me', { jar: 'alice1' })).status, 200);
   // Duplicate username (case-insensitive) rejected.
   const dup = await app.request('/register', { body: form({ username: 'ALICE1', password: 'longenough1' }) });

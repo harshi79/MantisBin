@@ -1,7 +1,25 @@
 /** Lightweight, single-page API documentation. No portal, no SDKs. */
 
-import { BURN_MODES, EXPIRATIONS, LANGUAGE_OPTIONS, LIMITS, RATE_LIMITS, SITE, THUMBNAIL, UNLOCK_TTL_SECONDS } from '../config.js';
-import { html } from '../lib/html.js';
+import {
+  BURN_MODES,
+  EXPIRATIONS,
+  FORMAT,
+  FORMAT_COLORS,
+  FORMAT_FONTS,
+  FORMAT_SIZES,
+  LANGUAGE_OPTIONS,
+  LIMITS,
+  PROFILE_PIN_LIMIT,
+  RATE_LIMITS,
+  SITE,
+  SOCIAL,
+  THUMBNAIL,
+  UNLOCK_TTL_SECONDS,
+} from '../config.js';
+import { html, raw } from '../lib/html.js';
+import { PROFILE_LIMITS } from '../lib/profiles.js';
+import { NEKO_CATEGORIES } from '../lib/media.js';
+import { PACK_LIMIT } from '../lib/stickers.js';
 import { formatBytes } from '../lib/validate.js';
 import { layout } from './layout.js';
 
@@ -51,8 +69,9 @@ X-API-Key: mb_…</code></pre>
           <tr><td><code>font</code> / <code>fontSize</code></td><td>string / number</td><td>optional viewer preferences</td></tr>
           <tr><td><code>expiresIn</code></td><td>string</td><td>optional: ${expirationOptions}; default <code>1w</code></td></tr>
           <tr><td><code>password</code></td><td>string</td><td>optional: ${LIMITS.passphraseMin}–${LIMITS.passphraseMax} chars; the paste is locked until it is entered</td></tr>
-          <tr><td><code>burnAfter</code></td><td>string</td><td>optional: ${BURN_MODES.map((mode) => `<code>${mode.id}</code>`).join(', ')}; default <code>never</code></td></tr>
+          <tr><td><code>burnAfter</code></td><td>string</td><td>optional: ${raw(BURN_MODES.map((mode) => `<code>${mode.id}</code>`).join(', '))}; default <code>never</code></td></tr>
           <tr><td><code>thumbnailUrl</code></td><td>string</td><td>optional: any <code>https</code> image URL (see <a href="#thumbnails">Thumbnails</a>). <b>Public even on a protected paste.</b></td></tr>
+          <tr><td><code>formatting</code></td><td>object</td><td>optional: line-level display hints (see <a href="#formatting">Formatting</a>). Never changes <code>content</code>.</td></tr>
         </tbody>
       </table>
       <pre><code>curl -sS -X POST ${base}/api/pastes \\
@@ -72,6 +91,10 @@ X-API-Key: mb_…</code></pre>
         which makes them safe to pipe into scripts and terminals. Add <code>?download=1</code> to the
         web route when you want an attachment with a safe title-derived filename; the API route stays inline.
       </p>
+
+      <div class="endpoint"><span class="method method-get">GET</span> <code>/api/stickers</code> <span class="muted small">— the curated sticker pack (public)</span></div>
+      <div class="endpoint"><span class="method method-get">GET</span> <code>/api/gifs</code> <span class="muted small">— GIF search (public, see <a href="#media">Stickers &amp; GIFs</a>)</span></div>
+      <div class="endpoint"><span class="method method-get">GET</span> <code>/api/notifications/unread</code> <span class="muted small">— the signed-in unread count (<code>401</code> signed out)</span></div>
 
       <h2 id="qr">QR sharing</h2>
       <div class="endpoint"><span class="method method-get">GET</span> <code>/p/:id/qr</code> <span class="muted small">— server-rendered QR share page (public)</span></div>
@@ -251,6 +274,39 @@ curl -sS ${base}/api/pastes/a8Kx92Lm        # 404 — it is gone</code></pre>
         <code>GET /api/meta</code> reports the size cap, accepted types and whether uploads are on.
       </p>
 
+      <h2 id="formatting">Formatting</h2>
+      <p>
+        A paste can carry <b>line-level display hints</b> next to its text:
+      </p>
+      <pre><code>-d '{"title":"notes","content":"Shopping\nMilk\nShip it","formatting":{"v":1,"lines":[{"line":2,"color":"teal"},{"line":3,"font":"sans","size":"lg","color":"red"}]}}'</code></pre>
+      <p>
+        <code>line</code> is <b>1-based</b> and ids are the only accepted values — fonts
+        ${raw(FORMAT_FONTS.map((font) => `<code>${font.id}</code>`).join(', '))},
+        sizes ${raw(FORMAT_SIZES.map((size) => `<code>${size.id}</code> (${size.px}px)`).join(', '))},
+        colours ${raw(FORMAT_COLORS.map((color) => `<code>${color.id}</code>`).join(', '))}. The
+        full vocabulary, including the shortcode list, is published at <code>GET /api/meta</code>.
+      </p>
+      <p>
+        <b>Your text is never changed.</b> Formatting is stored beside the content, so
+        <code>/raw</code>, downloads, QR codes, copies, expiry, burn-after-reading and the password
+        gate all operate on the exact bytes you sent, and the overlay is simply ignored by anything
+        that does not understand it. On <code>PATCH /api/pastes/:id</code>: omit <code>formatting</code>
+        to keep the stored styling, send <code>null</code> to clear it, or send a new object to
+        replace it. Reads return it alongside <code>content</code>.
+      </p>
+      <div class="notice">
+        Hints degrade instead of failing a request. Unknown ids, line numbers outside the paste and
+        an unreadable payload are dropped — a display hint never costs you a paste. At most
+        ${FORMAT.maxLines} lines are stored, in ${formatBytes(FORMAT.maxBytes)} (the tail is trimmed
+        if the overlay would not fit), and pastes too large for highlighting skip formatting
+        entirely.
+      </div>
+      <p>
+        Shortcodes such as <code>:fire:</code> (or <code>;fire;</code>) are resolved every time a
+        paste is <i>rendered</i>, never stored: the curated sticker pack wins, then a built-in emoji
+        set, otherwise the text is left exactly as typed.
+      </p>
+
       <h2 id="profiles">Profiles & visibility</h2>
       <p>
         Every paste is <code>unlisted</code> unless its owner says otherwise: link-only, never
@@ -269,6 +325,135 @@ curl -sS ${base}/api/pastes/a8Kx92Lm        # 404 — it is gone</code></pre>
         session revocation, and password-confirmed account deletion — which anonymises owned
         pastes (links keep working, owner cleared, visibility reset to unlisted) instead of
         deleting them.
+      </p>
+
+      <p>
+        A profile can be customised at <code>/me/profile</code>: a banner (an https image URL, or a
+        gradient built from the accent), an accent colour, a CSS-only name effect, a status emoji
+        (Unicode or a <code>:shortcode:</code>), a bio, and up to six links. Every choice is stored
+        as a validated id, a number, or a strict <code>#rrggbb</code> colour — never CSS — and is
+        rendered through the profile's own generated stylesheet,
+        <code>GET /u/:username/theme.css</code>. That sheet is same-origin and holds only validated
+        values, so pages carry no inline styles and the strict CSP stays intact. The profile page
+        links it with a content hash (<code>?v=…</code>) so it caches
+        <code>immutable</code> until the profile changes; the owner can preview unsaved values with
+        <code>?preview=1</code>, which is answered <code>private, no-store</code> and only to the
+        owner.
+      </p>
+      <p>
+        Badges are derived, never stored: <b>OG member</b> (one of the first ten accounts),
+        <b>Prolific</b> (10+ public pastes), <b>Viral</b> (500+ views on public pastes) and
+        <b>Stylist</b> (a customised profile). Operators can additionally award a <i>tag</i> — a
+        label with a palette colour and an optional shimmer or glow — from the admin control room.
+        Owners can pin up to three <i>public</i> pastes to the top of their profile
+        (<code>POST /me/pastes/:id/pin</code>); unlisted pastes cannot be pinned. Profile visits are
+        counted once per visitor per six hours with the same keyed pseudonym as paste views — no
+        cookie and no raw address.
+      </p>
+      <pre><code>GET /api/users/:username
+{
+  "username": "harshi",
+  "displayName": "Harshi",          // null when unset
+  "bio": "…",                       // "" when hidden
+  "status": { "emoji": ":fire:", "text": "shipping" },   // null when unset
+  "accent": "#22d3ee",
+  "nameEffect": "neon",
+  "banner": { "type": "gradient", "url": null },         // null when unset
+  "links": [{ "platform": "github", "label": "GitHub", "url": "https://github.com/…" }],
+  "tags": [{ "id": "beta", "label": "Beta tester", "color": "amber" }],
+  "badges": ["og", "prolific", "viral", "stylist"],
+  "stats": { "publicPastes": 12, "views": 900, "profileViews": 31, "followers": 0, "following": 0 },
+  "pastes": [ /* paste objects, public only, pinned first */ ]
+}</code></pre>
+
+      <h2 id="social">Following, reactions & bookmarks</h2>
+      <p>
+        Signed-in accounts can follow each other: <code>POST /u/:username/follow</code> toggles the
+        follow (send <code>follow=0</code> to unfollow), and every profile links its public
+        <code>/u/:username/followers</code> and <code>/u/:username/following</code> lists. A follow
+        is one row in the graph; a self-follow is refused. The account that is followed gets a
+        notification, at most one per follower per day.
+      </p>
+      <p>
+        Reactions are deliberately small: a fixed palette of eight emoji, one reaction per account
+        per paste, and <b>public pastes only</b> — nothing about an unlisted or password-protected
+        paste is ever published, not even a count. Reaction totals are computed from rows on every
+        render, never cached. <code>POST /p/:id/react</code> takes <code>reaction=🔥</code> (a glyph
+        from the palette, or the stable id such as <code>fire</code>); an empty value removes the
+        reaction and the author's unread "somebody reacted" notice with it.
+      </p>
+      <p>
+        Bookmarks are the private counterpart: <code>POST /p/:id/bookmark</code> saves any paste you
+        can already read — public, unlisted, or a protected paste you have unlocked — to
+        <code>/me/bookmarks</code>, where nobody else can see it. The list holds up to
+        <code>2000</code> pastes and keeps a deleted, expired or burned paste out of the list.
+      </p>
+      <p>
+        Notifications collect follows, reactions, new public pastes from accounts you follow, and
+        operator announcements in <code>/notifications</code>, where one notice or all of them can
+        be marked read. The header bell shows the unread count (capped at <code>9+</code>). Read
+        notices older than 30 days are swept by maintenance; an unread one is never deleted.
+        Deletes cascade: pastes and accounts take their follows, bookmarks, reactions and
+        notifications with them.
+      </p>
+      <p>
+        All of this is server-rendered HTML forms: no third-party JavaScript, no client state, and
+        every list page is <code>noindex</code>. Guests can read public counts but cannot react,
+        bookmark or follow — each of those posts redirects to <code>/login?next=…</code> first.
+      </p>
+      <p>
+        The header bell is the one JavaScript-driven read in the product: it polls
+        <code>GET /api/notifications/unread</code> on the same origin (no key, no body, session
+        cookie only), capped at <code>${RATE_LIMITS.notifyPoll.limit}/hour</code> per account. The
+        number is the only thing it returns.
+      </p>
+
+
+      <h2 id="media">Stickers & GIFs</h2>
+      <p>
+        The editor's <b>Stickers & GIFs</b> panel is a shortcut for typing. Everything it inserts is
+        ordinary text, resolved when the paste is rendered — never stored markup:
+      </p>
+      <ul>
+        <li>
+          A <b>shortcode</b> such as <code>:wave:</code> becomes the built-in emoji, or the image of
+          a curated pack entry with the same token. An unknown token stays exactly as typed, so a
+          paste never shows a broken picture.
+        </li>
+        <li>
+          A <b>media line</b> — a line that holds nothing but an <code>https</code> image URL ending
+          in <code>.gif</code>, <code>.png</code>, <code>.jpg</code>, <code>.jpeg</code> or
+          <code>.webp</code> — renders as a picture. A URL written inside a sentence stays a link,
+          and a query string disqualifies the line, so prose is never re-interpreted.
+        </li>
+      </ul>
+      <p>
+        <code>content</code> itself is never rewritten: <code>/raw</code>, downloads, forks and the
+        API all return the exact bytes the author typed.
+      </p>
+      <div class="endpoint"><span class="method method-get">GET</span> <code>/api/stickers</code> <span class="muted small">— the curated pack (public, cacheable)</span></div>
+      <p>
+        Returns <code>{ stickers: [{ token, url, emoji, label }] }</code>. The pack is edited by the
+        operator at <code>/admin/stickers</code>, is capped at
+        <code>${PACK_LIMIT}</code> entries, and is cacheable for a minute with
+        <code>stale-while-revalidate</code>, because it only changes when an administrator changes it.
+      </p>
+      <div class="endpoint"><span class="method method-get">GET</span> <code>/api/gifs?q=cat&amp;limit=24</code> <span class="muted small">— GIF search (public)</span></div>
+      <div class="endpoint"><span class="method method-get">GET</span> <code>/api/gifs?category=hug</code> <span class="muted small">— one anime reaction GIF (public)</span></div>
+      <p>
+        GIF search is proxied through this site, never called from your browser: results come from
+        <b>Giphy</b> (search and trending, rated <code>g</code>) and <b>Nekos.best</b> (${NEKO_CATEGORIES.length}
+        curated categories). Responses are <code>{ gifs, provider, query, category, degraded }</code>,
+        where each GIF is <code>{ id, url, preview, label, provider, emoji }</code>. A provider outage
+        is not an error: the endpoint answers <code>200</code> with <code>degraded: true</code> and an
+        empty list, so the editor keeps working. Nekos.best needs no key; Giphy runs on its published
+        public beta key unless the operator sets <code>GIPHY_API_KEY</code>.
+      </p>
+      <p>
+        An administrator can also send an <b>announcement</b> to every account from
+        <code>/admin/broadcast</code>. It appears as one notification per account (${SOCIAL.broadcastMax}
+        accounts per send), takes a title, a message and an optional link that must be an
+        <code>https</code> address or a path on this site, and every send is recorded in the audit log.
       </p>
 
       <h2 id="shape">Paste object</h2>
@@ -310,6 +495,8 @@ curl -sS ${base}/api/pastes/a8Kx92Lm        # 404 — it is gone</code></pre>
         <li>Reads (API): ${RATE_LIMITS.apiRead.limit}/hour per IP. Auth endpoints: ${RATE_LIMITS.auth.limit}/${Math.round(RATE_LIMITS.auth.window / 60)} min per IP.</li>
         <li>Paste passphrases: ${LIMITS.passphraseMin}–${LIMITS.passphraseMax} characters, stored as a PBKDF2-SHA256 hash. Unlocking lasts ${Math.round(UNLOCK_TTL_SECONDS / 60)} minutes and is capped at ${RATE_LIMITS.unlock.limit} attempts / ${Math.round(RATE_LIMITS.unlock.window / 60)} min per paste + IP.</li>
         <li>View counts ignore repeat refreshes from the same visitor within 6 hours; a locked paste is never counted until it is unlocked, and a burn-after-reading paste is deleted as it is served.</li>
+        <li>GIF search: ${RATE_LIMITS.media.limit}/hour per IP, shared by both media endpoints; the pack holds ${PACK_LIMIT} stickers. Notification polling: ${RATE_LIMITS.notifyPoll.limit}/hour per account.</li>
+        <li>Profile extras: a bio of ${PROFILE_LIMITS.bio} characters, ${PROFILE_LIMITS.links} links, a ${PROFILE_LIMITS.displayName}-character display name, a status of ${PROFILE_LIMITS.statusGraphemes} emoji, and at most ${PROFILE_PIN_LIMIT} pinned public pastes per profile. Profile saves are capped at ${RATE_LIMITS.profile.limit}/${Math.round(RATE_LIMITS.profile.window / 60)} min per account.</li>
       </ul>
 
       <h2 id="languages">Languages</h2>
@@ -320,6 +507,22 @@ curl -sS ${base}/api/pastes/a8Kx92Lm        # 404 — it is gone</code></pre>
         Every paste is unlisted: no directory, no search, no feed. Paste pages and the API send
         <code>X-Robots-Tag: noindex, nofollow</code> and a matching <code>&lt;meta name="robots"&gt;</code>,
         and <code>robots.txt</code> disallows <code>/p/</code>. Only someone with the URL finds a paste.
+      </p>
+      <p>
+        The one indexable surface is an account's opt-in profile: only pastes its owner marked
+        <code>public</code> appear on <code>/u/&lt;username&gt;</code> and in
+        <code>GET /api/users/:username</code>, and switching a paste back to unlisted removes it
+        immediately. Notifications, bookmarks, settings and the editor stay
+        <code>noindex</code> and are never public.
+      </p>
+      <p>
+        Two things leave this server on their own. An image or GIF you insert is fetched by the
+        reader's browser straight from the host named in the URL (Giphy, Nekos.best, or your
+        thumbnail host) — rendered images use <code>referrerpolicy="no-referrer"</code>, so those
+        hosts learn nothing about the paste you came from. A media search is relayed through this
+        same origin to Giphy or Nekos.best: the browser's request carries your session cookie to
+        this site only, and the upstream call carries the query and nothing else. No key is ever
+        exposed to a browser.
       </p>
     </div>
   `;

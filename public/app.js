@@ -906,4 +906,667 @@
       }
     }
   }
+  /* ---- line formatting (merge phase 1) ---------------------------------- */
+
+  // Formatting is stored beside the text, never inside it: the hidden
+  // `formatting` input carries a JSON overlay of `{ line, font?, size?, color? }`
+  // entries and the server re-validates every id against its own whitelist. The
+  // editor only ever *offers* valid ids, so a paste saved from here cannot be
+  // rejected for a bad colour. With JavaScript off this whole bar stays hidden
+  // and the paste is saved plain — reading never depends on any of it.
+
+  var formatBar = doc.querySelector('[data-format-toolbar]');
+  var formatInput = doc.querySelector('[data-format-input]');
+  var formatPreview = doc.querySelector('[data-format-preview]');
+  var formatPreviewBody = doc.querySelector('[data-format-preview-body]');
+  var formatPreviewNote = doc.querySelector('[data-format-preview-note]');
+  var formatStatus = doc.querySelector('[data-format-status]');
+  var formatConfig = null;
+
+  if (formatBar && formatInput && editor) {
+    try {
+      formatConfig = JSON.parse(formatBar.getAttribute('data-format') || '{}');
+    } catch (e) {
+      formatConfig = null;
+    }
+  }
+
+  if (formatConfig) {
+    var MAX_LINES = Number(formatConfig.maxLines) || 2000;
+    // 1-based line number -> { font, size, color }
+    var formatMap = {};
+
+    function loadFormatting() {
+      formatMap = {};
+      var raw = (formatInput.value || '').trim();
+      if (!raw) return;
+      try {
+        var parsed = JSON.parse(raw);
+        if (!parsed || !Array.isArray(parsed.lines)) return;
+        for (var i = 0; i < parsed.lines.length; i++) {
+          var entry = parsed.lines[i];
+          if (!entry) continue;
+          var line = Number(entry.line);
+          if (!isFinite(line) || line < 1) continue;
+          var clean = {};
+          if (entry.font) clean.font = String(entry.font);
+          if (entry.size) clean.size = String(entry.size);
+          if (entry.color) clean.color = String(entry.color);
+          if (clean.font || clean.size || clean.color) formatMap[line] = clean;
+        }
+      } catch (e) {
+        formatMap = {};
+      }
+    }
+
+    function serialiseFormatting() {
+      var lines = Object.keys(formatMap)
+        .map(Number)
+        .sort(function (a, b) { return a - b; })
+        .slice(0, MAX_LINES)
+        .map(function (line) {
+          var entry = formatMap[line];
+          var out = { line: line };
+          if (entry.font) out.font = entry.font;
+          if (entry.size) out.size = entry.size;
+          if (entry.color) out.color = entry.color;
+          return out;
+        });
+      return lines.length ? JSON.stringify({ v: formatConfig.v || 1, lines: lines }) : '';
+    }
+
+    function classFor(entry) {
+      var classes = '';
+      if (entry.font) classes += ' fmt-f-' + entry.font;
+      if (entry.size) classes += ' fmt-s-' + entry.size;
+      if (entry.color) classes += ' fmt-c-' + entry.color;
+      return classes;
+    }
+
+    function lineOfIndex(index) {
+      var value = editor.value.slice(0, index);
+      var line = 1;
+      for (var i = 0; i < value.length; i++) {
+        if (value.charCodeAt(i) === 10) line++;
+      }
+      return line;
+    }
+
+    /** The 1-based inclusive line range the current selection covers. */
+    function selectedRange() {
+      var start = editor.selectionStart;
+      var end = editor.selectionEnd;
+      var first = lineOfIndex(start);
+      var last = lineOfIndex(end);
+      // A selection ending exactly at the start of a line does not cover it.
+      if (end > start && editor.value.charAt(end - 1) === '\n') last = Math.max(first, last - 1);
+      return { first: first, last: Math.max(first, last) };
+    }
+
+    function countLines(value) {
+      var lines = 1;
+      for (var i = 0; i < value.length; i++) if (value.charCodeAt(i) === 10) lines++;
+      return lines;
+    }
+
+    function describe(entry) {
+      var parts = [];
+      if (entry.font) parts.push(labelOf(formatConfig.fonts, entry.font) || entry.font);
+      if (entry.size) parts.push(labelOf(formatConfig.sizes, entry.size) || entry.size);
+      if (entry.color) parts.push(labelOf(formatConfig.colors, entry.color) || entry.color);
+      return parts.join(' · ');
+    }
+
+    function labelOf(list, id) {
+      if (!list) return '';
+      for (var i = 0; i < list.length; i++) if (list[i].id === id) return list[i].label;
+      return '';
+    }
+
+    function applyToSelection(patch) {
+      var range = selectedRange();
+      for (var line = range.first; line <= range.last; line++) {
+        var entry = formatMap[line] || {};
+        if (Object.prototype.hasOwnProperty.call(patch, 'font')) entry.font = patch.font;
+        if (Object.prototype.hasOwnProperty.call(patch, 'size')) entry.size = patch.size;
+        if (Object.prototype.hasOwnProperty.call(patch, 'color')) entry.color = patch.color;
+        if (!entry.font && !entry.size && !entry.color) delete formatMap[line];
+        else formatMap[line] = entry;
+      }
+      syncFormatting(range);
+    }
+
+    function clearSelection() {
+      var range = selectedRange();
+      var removed = 0;
+      for (var line = range.first; line <= range.last; line++) {
+        if (formatMap[line]) {
+          delete formatMap[line];
+          removed++;
+        }
+      }
+      syncFormatting(range, removed ? 'Cleared ' + removed + ' line' + (removed === 1 ? '' : 's') + '.' : 'Nothing to clear there.');
+    }
+
+    function syncFormatting(range, overrideStatus) {
+      var total = countLines(editor.value);
+      // Drop hints for lines that no longer exist, so deleting text never
+      // leaves stale entries behind.
+      Object.keys(formatMap).forEach(function (key) {
+        if (Number(key) > total) delete formatMap[key];
+      });
+      formatInput.value = serialiseFormatting();
+
+      var count = Object.keys(formatMap).length;
+      var status = overrideStatus;
+      if (!status) {
+        var entry = formatMap[range.first];
+        var label = 'Select text, then pick a style.';
+        if (entry) label = 'Line ' + range.first + ': ' + describe(entry);
+        else if (range.last > range.first) label = 'Lines ' + range.first + '–' + range.last + ': plain.';
+        status = label;
+      }
+      if (count > 0 && !overrideStatus) {
+        status += ' (' + count + ' formatted line' + (count === 1 ? '' : 's') + ')';
+      }
+      if (formatStatus) {
+        formatStatus.textContent = status;
+        formatStatus.className = 'format-status' + (count > 0 ? ' is-active' : '');
+      }
+      renderFormatPreview(count);
+    }
+
+    function renderFormatPreview(count) {
+      if (!formatPreview || !formatPreviewBody || formatPreview.hidden) return;
+      var value = editor.value;
+      var lines = value.split('\n');
+      var cap = 400;
+      var shown = Math.min(lines.length, cap);
+      var fragment = doc.createDocumentFragment();
+      for (var i = 0; i < shown; i++) {
+        var entry = formatMap[i + 1];
+        var div = doc.createElement('div');
+        div.className = 'format-preview-line' + (entry ? classFor(entry) : '');
+        if (formatConfig.emoji) div.textContent = replaceShortcodes(lines[i], formatConfig.emoji);
+        else div.textContent = lines[i];
+        fragment.appendChild(div);
+      }
+      formatPreviewBody.textContent = '';
+      formatPreviewBody.appendChild(fragment);
+      if (formatPreviewNote) {
+        formatPreviewNote.textContent = lines.length > cap
+          ? 'Showing the first ' + cap + ' of ' + lines.length + ' lines.'
+          : count + ' formatted';
+      }
+    }
+
+    function replaceShortcodes(line, emoji) {
+      return String(line).replace(/[:;]([a-z0-9][a-z0-9_-]{0,31})[:;]/gi, function (match, name) {
+        var found = emoji[String(name).toLowerCase()];
+        return found ? found : match;
+      });
+    }
+
+    var fontSelect = formatBar.querySelector('[data-format-font]');
+    var sizeSelect = formatBar.querySelector('[data-format-size]');
+
+    if (fontSelect) {
+      fontSelect.addEventListener('change', function () {
+        applyToSelection({ font: fontSelect.value });
+        fontSelect.value = '';
+      });
+    }
+    if (sizeSelect) {
+      sizeSelect.addEventListener('change', function () {
+        applyToSelection({ size: sizeSelect.value });
+        sizeSelect.value = '';
+      });
+    }
+
+    var swatches = formatBar.querySelectorAll('[data-format-color]');
+    for (var sw = 0; sw < swatches.length; sw++) {
+      swatches[sw].addEventListener('click', function (event) {
+        applyToSelection({ color: event.currentTarget.getAttribute('data-format-color') });
+      });
+    }
+
+    var clearButton = formatBar.querySelector('[data-format-clear]');
+    if (clearButton) clearButton.addEventListener('click', clearSelection);
+
+    var previewToggle = formatBar.querySelector('[data-format-preview-toggle]');
+    if (previewToggle) {
+      previewToggle.addEventListener('click', function () {
+        var open = formatPreview.hidden;
+        formatPreview.hidden = !open;
+        previewToggle.setAttribute('aria-pressed', open ? 'true' : 'false');
+        if (open) renderFormatPreview(Object.keys(formatMap).length);
+      });
+    }
+
+    // Selecting lines updates the status line; typing updates it too (and prunes
+    // hints for lines that disappeared).
+    editor.addEventListener('keyup', function () { syncFormatting(selectedRange()); });
+    editor.addEventListener('mouseup', function () { syncFormatting(selectedRange()); });
+    editor.addEventListener('input', function () { syncFormatting(selectedRange()); });
+    editor.addEventListener('blur', function () { syncFormatting(selectedRange()); });
+
+    // The bar is only useful with scripting: reveal it now that it works.
+    formatBar.hidden = false;
+    loadFormatting();
+    syncFormatting(selectedRange());
+  }
+
+  /* ---- stickers & GIFs (merge phase 4) ---------------------------------- */
+
+  /**
+   * The editor's media panel: emoji, the curated sticker pack and GIF search.
+   *
+   * Everything here is a shortcut for typing. The server already renders
+   * `:wave:` shortcodes and a bare image URL on its own line, so the panel is a
+   * plain `<details>` that degrades to instructions. The one network call goes
+   * to this site's own `/api/gifs` (never to Giphy or Nekos.best directly —
+   * `connect-src 'self'` would refuse that anyway), and the endpoint is taken
+   * from the markup rather than hard-coded.
+   */
+  var mediaPanel = doc.querySelector('[data-media-panel]');
+  if (mediaPanel && editor) initMediaPanel(mediaPanel);
+
+  function initMediaPanel(panel) {
+    var endpoint = panel.getAttribute('data-media-endpoint') || '/api/gifs';
+    var status = panel.querySelector('[data-media-status]');
+    var grid = panel.querySelector('[data-media-grid]');
+    var searchForm = panel.querySelector('[data-media-search]');
+    var queryInput = panel.querySelector('[data-media-query]');
+    var categorySelect = panel.querySelector('[data-media-category]');
+    var tabs = panel.querySelectorAll('[data-media-tab]');
+    var panes = panel.querySelectorAll('[data-media-pane]');
+    var emoji = {};
+    try {
+      emoji = JSON.parse(panel.getAttribute('data-media-emoji') || '{}').emoji || {};
+    } catch (error) {
+      emoji = {};
+    }
+    var loadedTrending = false;
+
+    function say(message) {
+      if (status) status.textContent = message || '';
+    }
+
+    /** Insert text at the caret and leave the caret after it. */
+    function insert(text) {
+      var start = editor.selectionStart;
+      var end = editor.selectionEnd;
+      var value = editor.value;
+      editor.value = value.slice(0, start) + text + value.slice(end);
+      var caret = start + text.length;
+      editor.selectionStart = caret;
+      editor.selectionEnd = caret;
+      editor.focus();
+      // The byte counter, gutter and draft saver all listen for this.
+      editor.dispatchEvent(new Event('input', { bubbles: true }));
+    }
+
+    /** A picture URL only renders when it is the whole line, so pad it. */
+    function insertUrl(url) {
+      var value = editor.value;
+      var start = editor.selectionStart;
+      var end = editor.selectionEnd;
+      var lead = start > 0 && value.charAt(start - 1) !== '\n' ? '\n' : '';
+      var tail = end < value.length && value.charAt(end) !== '\n' ? '\n' : '';
+      insert(lead + url + tail);
+    }
+
+    function selectTab(name) {
+      Array.prototype.forEach.call(tabs, function (tab) {
+        tab.setAttribute('aria-selected', tab.getAttribute('data-media-tab') === name ? 'true' : 'false');
+      });
+      Array.prototype.forEach.call(panes, function (pane) {
+        pane.hidden = pane.getAttribute('data-media-pane') !== name;
+      });
+      // Trending is fetched the first time somebody actually asks for a GIF.
+      if (name === 'gifs' && !loadedTrending) load('');
+    }
+
+    function tile(gif) {
+      var button = doc.createElement('button');
+      button.type = 'button';
+      button.className = 'media-tile';
+      button.setAttribute('data-media-url', gif.url);
+      button.title = gif.label || 'Insert this GIF';
+      button.setAttribute('aria-label', gif.label || 'Insert this GIF');
+      var image = doc.createElement('img');
+      image.src = gif.preview || gif.url;
+      image.alt = '';
+      image.loading = 'lazy';
+      image.decoding = 'async';
+      image.referrerPolicy = 'no-referrer';
+      image.width = 120;
+      image.height = 90;
+      button.appendChild(image);
+      if (gif.provider === 'neko') {
+        var mark = doc.createElement('span');
+        mark.className = 'media-tile-mark';
+        mark.textContent = 'anime';
+        button.appendChild(mark);
+      }
+      return button;
+    }
+
+    function show(gifs, degraded) {
+      if (!grid) return;
+      grid.textContent = '';
+      if (degraded || !gifs || !gifs.length) {
+        say(degraded ? 'GIF search is unavailable right now. Try again shortly.' : 'No GIFs found. Try another word.');
+        return;
+      }
+      for (var i = 0; i < gifs.length; i++) grid.appendChild(tile(gifs[i]));
+      say(gifs.length + (gifs.length === 1 ? ' GIF' : ' GIFs') + ' from ' + (gifs[0].provider === 'neko' ? 'Nekos.best' : 'Giphy'));
+    }
+
+    function load(query, category) {
+      var url = endpoint + '?limit=24';
+      if (category) url += '&category=' + encodeURIComponent(category);
+      else if (query) url += '&q=' + encodeURIComponent(query);
+      if (grid) grid.textContent = '';
+      say(query ? 'Searching…' : 'Loading…');
+      fetch(url, { headers: { accept: 'application/json' }, credentials: 'same-origin' })
+        .then(function (response) {
+          if (!response.ok) throw new Error('bad status ' + response.status);
+          return response.json();
+        })
+        .then(function (data) {
+          loadedTrending = true;
+          show(data.gifs, data.degraded);
+        })
+        .catch(function () {
+          say('GIF search is unavailable right now. Try again shortly.');
+        });
+    }
+
+    Array.prototype.forEach.call(tabs, function (tab) {
+      tab.addEventListener('click', function () {
+        selectTab(tab.getAttribute('data-media-tab'));
+      });
+    });
+
+    panel.addEventListener('click', function (event) {
+      var chip = event.target.closest('[data-media-insert]');
+      if (chip) {
+        var token = chip.getAttribute('data-media-insert') || '';
+        insert(token + ' ');
+        say(emoji[token.slice(1, -1)] ? 'Inserted ' + emoji[token.slice(1, -1)] + ' ' + token : 'Inserted ' + token);
+        return;
+      }
+      var choice = event.target.closest('[data-media-url]');
+      if (choice) {
+        insertUrl(choice.getAttribute('data-media-url'));
+        say('Added on its own line — it renders as a picture.');
+      }
+    });
+
+    if (searchForm) {
+      searchForm.addEventListener('submit', function (event) {
+        event.preventDefault();
+        load(queryInput ? queryInput.value.trim() : '', categorySelect ? categorySelect.value : '');
+      });
+    }
+    if (categorySelect) {
+      categorySelect.addEventListener('change', function () {
+        if (categorySelect.value) load('', categorySelect.value);
+      });
+    }
+  }
+
+  /* ---- notification badge (merge phase 4) ------------------------------- */
+
+  /**
+   * Keep the header's unread count honest between page loads.
+   *
+   * This is the only thing the bell wants from JavaScript: `/notifications` and
+   * every page behind it are server-rendered, and the count is already correct
+   * in the HTML. The poll is deliberately slow, waits for a visible tab, and
+   * gives up for good on a 401/429 rather than hammering the endpoint.
+   */
+  var unreadBell = doc.querySelector('[data-unread-bell]');
+  if (unreadBell) initUnreadBadge(unreadBell);
+
+  function initUnreadBadge(link) {
+    var endpoint = link.getAttribute('data-unread-endpoint') || '/api/notifications/unread';
+    var badge = link.querySelector('[data-unread-badge]');
+    var max = Number(badge && badge.getAttribute('data-max')) || 9;
+    var stopped = false;
+    var ticking = false;
+
+    function render(count) {
+      var text = count > max ? max + '+' : String(count);
+      if (badge) {
+        badge.textContent = text;
+        badge.hidden = count === 0;
+      }
+      var description = count ? count + ' unread notification' + (count === 1 ? '' : 's') : 'Notifications';
+      link.setAttribute('aria-label', description);
+      link.title = description;
+    }
+
+    function tick() {
+      if (stopped || ticking || doc.hidden) return;
+      ticking = true;
+      fetch(endpoint, { headers: { accept: 'application/json' }, credentials: 'same-origin' })
+        .then(function (response) {
+          if (response.status === 401 || response.status === 429) {
+            stopped = true;
+            return null;
+          }
+          return response.ok ? response.json() : null;
+        })
+        .then(function (data) {
+          if (data && typeof data.unread === 'number') render(data.unread);
+        })
+        .catch(function () {
+          // Offline, or the fetch was blocked: the rendered count stands.
+        })
+        .then(function () {
+          ticking = false;
+        });
+    }
+
+    setInterval(tick, 60000);
+    doc.addEventListener('visibilitychange', function () {
+      if (!doc.hidden) tick();
+    });
+  }
+
+  /* ---- profile customiser (merge phase 2) -------------------------------- */
+
+  /**
+   * The three conveniences on /me/profile: a live preview, link rows and
+   * counters. The form itself is complete without any of this — it posts and
+   * validates on the server — so everything here is additive, and every hook
+   * is optional.
+   *
+   * The preview works by re-pointing the page's generated stylesheet
+   * (`/u/:username/theme.css`) at an unsaved `?preview=1&...` URL. That is the
+   * same generator the real profile uses, which is why the preview cannot
+   * drift from the result — and it needs no inline styles, so the strict CSP
+   * is untouched.
+   */
+  var profileForm = doc.querySelector('[data-profile-form]');
+  if (profileForm) initProfileCustomiser(profileForm);
+
+  function initProfileCustomiser(form) {
+    var themeLink = doc.querySelector('link[rel="stylesheet"][href*="/theme.css"]');
+    var themeBase = themeLink ? themeLink.getAttribute('href').split('?')[0] : null;
+    var previewName = form.querySelector('[data-preview-name]');
+    var previewStatus = form.querySelector('[data-preview-status]');
+    var previewBio = form.querySelector('[data-preview-bio]');
+    var previewLinks = form.querySelector('[data-preview-links]');
+    var previewHero = form.querySelector('[data-preview-hero]');
+    var previewNote = form.querySelector('[data-preview-note]');
+    var displayNameInput = form.querySelector('[name="display_name"]');
+    var bioInput = form.querySelector('[name="bio"]');
+    var bioToggle = form.querySelector('input[type="checkbox"][name="bio_enabled"]');
+    var statusInput = form.querySelector('[data-status-input]');
+    var statusTextInput = form.querySelector('[name="status_text"]');
+    var accentInput = form.querySelector('[data-accent-input]');
+    var effectSelect = form.querySelector('[data-effect-select]');
+    var speedInput = form.querySelector('[data-effect-speed]');
+    var intensityInput = form.querySelector('[data-effect-intensity]');
+    var bannerInput = form.querySelector('[data-banner-url]');
+    var linkRows = form.querySelector('[data-link-rows]');
+    var linkTemplate = form.querySelector('[data-link-template]');
+    var addLink = form.querySelector('[data-link-add]');
+    var timer = null;
+
+    function effectClass() {
+      if (!effectSelect) return '';
+      var option = effectSelect.options[effectSelect.selectedIndex];
+      return (option && option.getAttribute('data-class')) || '';
+    }
+
+    function bannerType() {
+      var checked = form.querySelector('[data-banner-type]:checked');
+      return checked ? checked.value : 'image';
+    }
+
+    /** Everything a visitor would see, recomputed from the form. */
+    function renderPreview() {
+      if (previewName) {
+        var fallback = displayNameInput && displayNameInput.placeholder ? displayNameInput.placeholder : '';
+        previewName.textContent = (displayNameInput && displayNameInput.value.trim()) || fallback;
+        previewName.className = 'fx' + (effectClass() ? ' ' + effectClass() : '');
+      }
+      if (previewStatus) {
+        var emoji = statusInput ? statusInput.value.trim() : '';
+        var text = statusTextInput ? statusTextInput.value.trim() : '';
+        previewStatus.textContent = (emoji ? emoji + ' ' : '') + text;
+        previewStatus.hidden = !emoji && !text;
+      }
+      if (previewBio) {
+        var bio = bioInput ? bioInput.value.trim() : '';
+        var show = bio && (!bioToggle || bioToggle.checked);
+        previewBio.textContent = show ? bio : '';
+        previewBio.hidden = !show;
+      }
+      if (previewLinks && linkRows) {
+        var chips = [];
+        Array.prototype.forEach.call(linkRows.querySelectorAll('.link-row'), function (row) {
+          var url = row.querySelector('[name="link_url"]');
+          var label = row.querySelector('[name="link_label"]');
+          var value = url ? url.value.trim() : '';
+          if (!value) return;
+          chips.push((label && label.value.trim()) || value.replace(/^https?:\/\//, ''));
+        });
+        previewLinks.textContent = '';
+        chips.slice(0, 6).forEach(function (label) {
+          var chip = doc.createElement('span');
+          chip.className = 'link-chip';
+          chip.textContent = label;
+          previewLinks.appendChild(chip);
+        });
+        previewLinks.hidden = !chips.length;
+      }
+      if (previewHero) previewHero.classList.toggle('has-banner', Boolean((bannerInput && bannerInput.value.trim()) || bannerType() === 'gradient'));
+    }
+
+    /** Re-point the theme stylesheet at the unsaved values (debounced). */
+    function scheduleTheme() {
+      if (previewNote) previewNote.textContent = 'Unsaved preview';
+      if (!themeBase) return;
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(function () {
+        var query = [
+          'preview=1',
+          'accent=' + encodeURIComponent(accentInput ? accentInput.value : ''),
+          'effect=' + encodeURIComponent(effectSelect ? effectSelect.value : 'none'),
+          'speed=' + encodeURIComponent(speedInput ? speedInput.value : ''),
+          'intensity=' + encodeURIComponent(intensityInput ? intensityInput.value : ''),
+          'bannerType=' + encodeURIComponent(bannerType()),
+          'banner=' + encodeURIComponent(bannerInput ? bannerInput.value.trim() : ''),
+        ].join('&');
+        themeLink.href = themeBase + '?' + query;
+      }, 200);
+    }
+
+    function refresh() {
+      renderPreview();
+      scheduleTheme();
+    }
+
+    // Counters: any input with data-count-to updates the element carrying the
+    // matching data-count.
+    Array.prototype.forEach.call(form.querySelectorAll('[data-count-to]'), function (input) {
+      var target = form.querySelector('[data-count="' + input.getAttribute('data-count-to') + '"]');
+      if (!target) return;
+      var update = function () {
+        target.textContent = String(input.value.length);
+      };
+      input.addEventListener('input', update);
+      update();
+    });
+
+    // Range readouts.
+    [[speedInput, '[data-effect-speed-out]'], [intensityInput, '[data-effect-intensity-out]']].forEach(function (pair) {
+      var output = pair[1] ? form.querySelector(pair[1]) : null;
+      if (!pair[0] || !output) return;
+      pair[0].addEventListener('input', function () {
+        output.textContent = pair[0].value;
+      });
+    });
+
+    // Accent presets + the emoji quick picks just fill their input.
+    Array.prototype.forEach.call(form.querySelectorAll('[data-accent-preset]'), function (button) {
+      button.addEventListener('click', function () {
+        if (!accentInput) return;
+        accentInput.value = button.getAttribute('data-accent-preset');
+        refresh();
+      });
+    });
+    Array.prototype.forEach.call(form.querySelectorAll('[data-status-emoji]'), function (button) {
+      button.addEventListener('click', function () {
+        if (!statusInput) return;
+        statusInput.value = button.getAttribute('data-status-emoji');
+        statusInput.focus();
+        refresh();
+      });
+    });
+
+    // Link rows: add, and remove (the last row is cleared instead of removed,
+    // so the form always posts something the server can name).
+    if (addLink && linkRows && linkTemplate) {
+      addLink.addEventListener('click', function () {
+        var fragment = linkTemplate.content.cloneNode(true);
+        linkRows.appendChild(fragment);
+        var added = linkRows.lastElementChild;
+        var first = added ? added.querySelector('input') : null;
+        if (first) first.focus();
+        refresh();
+      });
+    }
+    if (linkRows) {
+      linkRows.addEventListener('click', function (event) {
+        var button = event.target.closest('[data-link-remove]');
+        if (!button) return;
+        var row = button.closest('.link-row');
+        if (!row) return;
+        if (linkRows.querySelectorAll('.link-row').length > 1) row.remove();
+        else Array.prototype.forEach.call(row.querySelectorAll('input'), function (input) { input.value = ''; });
+        refresh();
+      });
+      linkRows.addEventListener('input', refresh);
+    }
+
+    [displayNameInput, bioInput, statusInput, statusTextInput, bannerInput, effectSelect, accentInput, speedInput, intensityInput].forEach(
+      function (input) {
+        if (!input) return;
+        input.addEventListener('input', refresh);
+        input.addEventListener('change', refresh);
+      },
+    );
+    Array.prototype.forEach.call(form.querySelectorAll('[data-banner-type]'), function (radio) {
+      radio.addEventListener('change', refresh);
+    });
+    if (bioToggle) bioToggle.addEventListener('change', refresh);
+
+    renderPreview();
+  }
 })();

@@ -24,7 +24,7 @@
  */
 
 import { BURN_MODES, DEFAULT_BURN_MODE } from '../config.js';
-import { deletePasteRows } from './pastes.js';
+import { deletePasteRows, pasteChildStatements } from './pastes.js';
 
 /** @typedef {import('../db/turso.js').Db} Db */
 /** @typedef {'view' | 'read'} ReadKind */
@@ -115,8 +115,8 @@ export async function pruneBurned(db, limit = 500) {
   const ids = rows.map((row) => row.id);
   const placeholders = ids.map(() => '?').join(', ');
   await db.batch([
-    { sql: `DELETE FROM paste_views WHERE paste_id IN (${placeholders})`, params: ids },
     { sql: `DELETE FROM pastes WHERE id IN (${placeholders})`, params: ids },
+    ...pasteChildStatements(ids),
   ]);
   return ids.length;
 }

@@ -1,12 +1,12 @@
-# MantisBin — the site and opt-in public profiles may be indexed; pastes are unlisted by design
-# and additionally carry X-Robots-Tag: noindex and <meta name="robots">.
+# MantisBin — the site, /docs and opt-in public profiles may be indexed; pastes are unlisted by
+# design and additionally carry X-Robots-Tag: noindex and <meta name="robots">.
 User-agent: *
 Allow: /
 Allow: /u/
 Disallow: /p/
+Disallow: /admin
 Disallow: /me
+Disallow: /notifications
 Disallow: /login
 Disallow: /register
 Disallow: /api/
-
-Sitemap: none
