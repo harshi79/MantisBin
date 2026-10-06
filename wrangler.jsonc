@@ -23,9 +23,10 @@
 		"not_found_handling": "none"
 	},
 
-	"vars": {
-		"SITE_URL": "https://mantisbin.yoriloveall.workers.dev"
-	},
+	// No plain vars: every URL the app writes (API links, QR, theme.css) is built
+	// from the request's own origin, so a deploy needs only the three secrets
+	// above. Merged features (profiles, social, stickers, GIF search, broadcast)
+	// are all on by default.
 
 	"observability": {
 		"enabled": true
