@@ -12,6 +12,7 @@
 
 import { COOKIE, SESSION_TTL_SECONDS } from '../config.js';
 import { hashPassword, randomToken, sha256Hex, verifyPassword } from './crypto.js';
+import { userGraphStatements } from './social.js';
 import { validatePassword, validateUsername } from './validate.js';
 
 /** @typedef {import('../db/turso.js').Db} Db */
@@ -164,14 +165,23 @@ export async function createSession(db, userId, ipHash = null, now = Math.floor(
 
 /**
  * Resolve a session cookie to a user. Expired sessions are dropped lazily.
+ *
+ * `unread` is the account's unread-notification count, read in the same
+ * statement (see below) so the navigation badge costs no extra round trip.
  * @param {Db} db
- * @returns {Promise<{ user: User, tokenHash: string, expiresAt: number } | null>}
+ * @returns {Promise<{ user: User, tokenHash: string, expiresAt: number, unread: number } | null>}
  */
 export async function resolveSession(db, token, now = Math.floor(Date.now() / 1000)) {
   if (!token || typeof token !== 'string' || token.length < 16) return null;
   const tokenHash = await sha256Hex(token);
+  // The unread-notification count rides along in the same round trip: the nav
+  // badge needs it on every rendered page, and a correlated COUNT on an indexed
+  // column is cheaper than a second query per request.
   const session = await db.get(
-    'SELECT token_hash, user_id, expires_at FROM sessions WHERE token_hash = ?',
+    `SELECT s.token_hash, s.user_id, s.expires_at,
+       (SELECT COUNT(*) FROM notifications n
+         WHERE n.recipient_user_id = s.user_id AND n.is_read = 0) AS unread
+     FROM sessions s WHERE s.token_hash = ?`,
     [tokenHash],
   );
   if (!session) return null;
@@ -184,7 +194,7 @@ export async function resolveSession(db, token, now = Math.floor(Date.now() / 10
     await db.run('DELETE FROM sessions WHERE token_hash = ?', [tokenHash]);
     return null;
   }
-  return { user, tokenHash, expiresAt: Number(session.expires_at) };
+  return { user, tokenHash, expiresAt: Number(session.expires_at), unread: Math.max(0, Number(session.unread ?? 0)) };
 }
 
 /** @param {Db} db */
@@ -343,6 +353,7 @@ export async function destroyUser(db, userId) {
     { sql: "UPDATE pastes SET user_id = NULL, visibility = 'unlisted' WHERE user_id = ?", params: [id] },
     { sql: 'DELETE FROM sessions WHERE user_id = ?', params: [id] },
     { sql: 'DELETE FROM api_keys WHERE user_id = ?', params: [id] },
+    ...userGraphStatements(id),
     { sql: 'DELETE FROM users WHERE id = ?', params: [id] },
   ]);
   return { pastes: Number(owned?.n ?? 0) };

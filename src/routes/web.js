@@ -7,11 +7,13 @@ import {
   AUTO_LANGUAGE,
   BURN_MODES,
   CLEANUP_BATCH,
+  FORMAT,
   COOKIE,
   DEFAULT_BURN_MODE,
   DEFAULT_FILENAME,
   DEFAULT_VISIBILITY,
   LIMITS,
+  PROFILE_PIN_LIMIT,
   UNLOCK_MAX_TOKENS,
   UNLOCK_TTL_SECONDS,
 } from '../config.js';
@@ -30,6 +32,15 @@ import {
 import { HttpError, headers, htmlResponse, jsonResponse, parseForm, readBody, redirect, safeRedirectTarget, svgResponse, textResponse } from '../lib/http.js';
 import { appSecret, canReadPaste, isPasteOwner } from '../lib/access.js';
 import { burnLabel, burnModeOf, claimBurnForRead } from '../lib/burn.js';
+import {
+  loadStickers,
+  lineClassMap,
+  normalizeFormatting,
+  parseFormatting,
+  renderStickers,
+  stickerIndex,
+  resolveStickers,
+} from '../lib/formatting.js';
 import {
   hashPassphrase,
   issueUnlockToken,
@@ -77,14 +88,33 @@ import {
   visitorHash,
 } from '../lib/pastes.js';
 import { consume } from '../lib/ratelimit.js';
+import { nekoCategories } from '../lib/media.js';
+import { listStickerPack } from '../lib/stickers.js';
+import { announcePublish, isBookmarked, reactionState } from '../lib/social.js';
 import { resolvePasteLanguage } from '../lib/detect.js';
-import { RATE_LIMITS } from '../config.js';
+import { RATE_LIMITS, REACTIONS } from '../config.js';
 import { editorPage } from '../views/editor.js';
 import { pastePage } from '../views/paste.js';
 import { qrPage } from '../views/qr.js';
 import { unlockPage } from '../views/unlock.js';
 import { loginPage, registerPage } from '../views/auth.js';
 import { myPastesPage } from '../views/mypastes.js';
+
+/** Human wording for the `?pin=` outcomes of a pin toggle. */
+function pinNotice(query) {
+  switch (query.get('pin')) {
+    case 'on':
+      return 'Pinned to the top of your profile.';
+    case 'off':
+      return 'Unpinned.';
+    case 'limit':
+      return `A profile can pin at most ${PROFILE_PIN_LIMIT} pastes — unpin one first.`;
+    case 'unlisted':
+      return 'Only public pastes can be pinned. Publish the paste first.';
+    default:
+      return null;
+  }
+}
 import { docsPage } from '../views/docs.js';
 
 /** @typedef {import('../app.js').Ctx} Ctx */
@@ -93,7 +123,7 @@ export function maxBytesFor(user) {
   return user ? LIMITS.userMaxBytes : LIMITS.anonMaxBytes;
 }
 
-function pageCtx(ctx) {
+export function pageCtx(ctx) {
   return { theme: ctx.theme, user: ctx.user, path: ctx.url.pathname };
 }
 
@@ -209,8 +239,24 @@ function readPasteInput(form, user, mode = 'create', env = {}) {
   if (!burnMode.ok) errors.push(burnMode.error);
   const thumbnail = readThumbnail(form, mode, env);
   if (thumbnail.error) errors.push(thumbnail.error);
+  // Formatting is display data: an unknown id, an out-of-range line or an
+  // unreadable payload degrades to "no formatting" rather than failing the
+  // save. An absent field means "leave the stored overlay alone" (so an edit
+  // that never mentions styling cannot destroy it), an empty field or `null`
+  // clears it, and any other JSON string replaces it.
+  const hasFormattingField = typeof form.formatting === 'string';
+  const formattingRaw = hasFormattingField ? /** @type {string} */ (form.formatting) : '';
+  const formatting = hasFormattingField
+    ? normalizeFormatting(formattingRaw, {
+        lineCount: content.ok ? String(content.value).split('\n').length : 1,
+      })
+    : { ok: true, value: undefined, lines: 0 };
+  if (!formatting.ok && formatting.error) errors.push(formatting.error);
   return {
     errors,
+    formatting: formatting.ok ? formatting.value : undefined,
+    formattingValue: formattingRaw.slice(0, FORMAT.maxBytes),
+    formattingLines: formatting.ok ? formatting.lines || 0 : 0,
     thumbnailUrl: thumbnail.value,
     thumbnailValue: thumbnail.url,
     thumbnailRemove: Boolean(thumbnail.remove),
@@ -247,14 +293,27 @@ export async function home(ctx) {
       protected: false,
       visibility: DEFAULT_VISIBILITY,
       thumbnail_url: '',
+      formatting: '',
+      formatting_lines: 0,
     },
     maxBytes: maxBytesFor(ctx.user),
     ...thumbnailUploadOptions(ctx.env),
+    ...(await mediaPanelOptions(ctx.db)),
   });
   return htmlResponse(body, 200, {}, { cache: 'no-store' });
 }
 
 /** POST /p */
+/**
+ * The editor's media panel needs the curated pack (rendered server-side, so it
+ * works with scripting off) and the anime category list for the GIF tab.
+ * @param {any} db
+ */
+async function mediaPanelOptions(db) {
+  const [stickers, gifCategories] = await Promise.all([listStickerPack(db), nekoCategories()]);
+  return { stickers, gifCategories };
+}
+
 export async function create(ctx) {
   const verdict = await consume(ctx.db, ctx.user ? `create:user:${ctx.user.id}` : `create:ip:${ctx.ip}`, RATE_LIMITS.create);
   if (!verdict.ok) {
@@ -282,11 +341,14 @@ export async function create(ctx) {
         burn_after: input.burnMode,
         protected: input.passphrase.mode === 'set',
         visibility: input.visibility,
+        formatting: input.formattingValue,
+        formatting_lines: input.formattingLines,
         thumbnail_url: input.thumbnailValue,
       },
       errors: input.errors,
       maxBytes: maxBytesFor(ctx.user),
       ...thumbnailUploadOptions(ctx.env),
+      ...(await mediaPanelOptions(ctx.db)),
     });
     return htmlResponse(body, 400);
   }
@@ -303,8 +365,14 @@ export async function create(ctx) {
     burnMode: input.burnMode,
     visibility: input.visibility,
     thumbnailUrl: input.thumbnailUrl,
+    formatting: input.formatting ?? null,
     now: ctx.now,
   });
+
+  // Tell the author's followers — `announcePublish` decides whether the paste
+  // qualifies at all (public, unprotected, owned), and the `.catch` keeps a
+  // fanout failure from ever costing the author the paste itself.
+  await announcePublish(ctx.db, paste, ctx.now).catch(() => 0);
 
   // Opportunistic sweep so expired content disappears even between cron runs.
   await pruneExpired(ctx.db, ctx.now, CLEANUP_BATCH).catch(() => 0);
@@ -315,6 +383,21 @@ export async function create(ctx) {
 // ---------------------------------------------------------------------------
 // Paste view / raw / edit / delete
 // ---------------------------------------------------------------------------
+
+/**
+ * Human-readable flags the social routes hand back through `?notice=`.
+ * An allow-list, so a crafted query string can never print arbitrary text.
+ */
+const PASTE_NOTICES = {
+  saved: 'Saved to your bookmarks.',
+  removed: 'Removed from your bookmarks.',
+  reacted: 'Reaction saved.',
+  unreacted: 'Reaction removed.',
+  limit: 'Your bookmark list is full. Remove one to save another.',
+  locked: 'Unlock that paste before bookmarking it.',
+  missing: 'That paste does not exist, or it expired.',
+  private: 'Reactions are only available on public pastes.',
+};
 
 /** GET /p/:id */
 export async function view(ctx, params) {
@@ -350,15 +433,47 @@ export async function view(ctx, params) {
   // A one-time paste is deleted as it is served, so there is nothing to count.
   const views = burning ? Number(paste.views) : await recordView(ctx.db, paste.id, visitor, ctx.now).catch(() => Number(paste.views));
 
+  // Formatting + shortcodes are presentation only: a paste too large for the
+  // highlight path renders plain, exactly as before.
   const oversized = paste.size > LIMITS.highlightMaxBytes;
-  const contentHtml = oversized
-    ? renderCode(paste.content, 'plaintext')
-    : addLineAnchors(renderCode(paste.content, paste.language));
+  const formatting = parseFormatting(paste.formatting);
+  let contentHtml;
+  if (oversized) {
+    contentHtml = renderCode(paste.content, 'plaintext');
+  } else {
+    const stickers = await loadStickers(ctx.db);
+    const resolved = resolveStickers(paste.content, stickerIndex(stickers));
+    const rendered = renderCode(resolved.text, paste.language);
+    contentHtml = addLineAnchors(renderStickers(rendered, resolved.stickers), {
+      classes: lineClassMap(formatting),
+    });
+  }
+
+  // Social state for this page. Counts come from the rows themselves, and the
+  // palette is fixed, so the chip order never jumps between visits.
+  const [reaction, bookmarked] = await Promise.all([
+    reactionState(ctx.db, paste.id, ctx.user?.id ?? null),
+    ctx.user ? isBookmarked(ctx.db, ctx.user.id, paste.id) : Promise.resolve(false),
+  ]);
+  const social = {
+    canReact: Boolean(ctx.user) && paste.visibility === 'public',
+    canBookmark: Boolean(ctx.user),
+    bookmarked,
+    mine: reaction.mine,
+    reactions: REACTIONS.map((entry) => ({
+      emoji: entry.emoji,
+      label: entry.label,
+      count: reaction.counts.find((count) => count.reaction === entry.emoji)?.count ?? 0,
+    })),
+  };
 
   const body = pastePage({
     ...pageCtx(ctx),
     paste: { ...paste, views },
+    social,
+    notice: PASTE_NOTICES[ctx.url.searchParams.get('notice') || ''] ?? null,
     contentHtml,
+    formatting,
     thumbnailUrl: safeThumbnailUrl(paste.thumbnail_url, ctx.env),
     highlighted: !oversized,
     lineNumbers: !oversized,
@@ -553,12 +668,17 @@ export async function forkForm(ctx, params) {
       // The thumbnail is a public URL on a shared host, so the copy can point
       // at the same image. Nothing is re-uploaded and the source is untouched.
       thumbnail_url: safeThumbnailUrl(paste.thumbnail_url, ctx.env) || '',
+      // Formatting is display metadata about text the copier just read, so it
+      // travels with the copy; the author can clear it in the editor.
+      formatting: paste.formatting || '',
+      formatting_lines: parseFormatting(paste.formatting).lines.length,
     },
     okMessage: oneTime
       ? `This was a one-time paste (${oneTime}) and has now been consumed — the copy you save is the only copy left.`
       : null,
     maxBytes: maxBytesFor(ctx.user),
     ...thumbnailUploadOptions(ctx.env),
+    ...(await mediaPanelOptions(ctx.db)),
   });
   return htmlResponse(body, 200, {}, { noindex: true });
 }
@@ -589,9 +709,12 @@ export async function editForm(ctx, params) {
       visibility: paste.visibility,
       thumbnail_url: safeThumbnailUrl(paste.thumbnail_url, ctx.env) || '',
       had_thumbnail: Boolean(safeThumbnailUrl(paste.thumbnail_url, ctx.env)),
+      formatting: paste.formatting || '',
+      formatting_lines: parseFormatting(paste.formatting).lines.length,
     },
     maxBytes: maxBytesFor(ctx.user),
     ...thumbnailUploadOptions(ctx.env),
+    ...(await mediaPanelOptions(ctx.db)),
   });
   return htmlResponse(body, 200, {}, { noindex: true });
 }
@@ -634,6 +757,7 @@ export async function editSave(ctx, params) {
       errors: input.errors,
       maxBytes: maxBytesFor(ctx.user),
       ...thumbnailUploadOptions(ctx.env),
+      ...(await mediaPanelOptions(ctx.db)),
     });
     return htmlResponse(body, 400, {}, { noindex: true });
   }
@@ -653,10 +777,17 @@ export async function editSave(ctx, params) {
       burnMode: input.burnMode,
       visibility: input.visibility,
       thumbnailUrl: input.thumbnailUrl,
+      formatting: input.formatting,
     },
     ctx.now,
   );
   if (!result.ok) throw new HttpError(result.reason === 'missing' ? 404 : 403);
+  // Editing a paste *into* public is the same news as creating one; the
+  // per-paste dedupe key makes a repeat invisible, and `existing` is the row as
+  // it was before this write.
+  if (input.visibility === 'public' && String(existing.visibility ?? '') !== 'public') {
+    await announcePublish(ctx.db, { ...existing, visibility: 'public' }, ctx.now).catch(() => 0);
+  }
   return redirect(`/p/${params.id}`);
 }
 
@@ -830,7 +961,9 @@ export async function myPastes(ctx) {
     apiKeys,
     stats,
     newKey: null,
-    notice: ctx.url.searchParams.get('deleted') ? 'Paste deleted.' : null,
+    notice: pinNotice(ctx.url.searchParams) ?? (ctx.url.searchParams.get('deleted') ? 'Paste deleted.' : null),
+    pinnedLimit: PROFILE_PIN_LIMIT,
+    unread: ctx.user?.unread ?? 0,
   });
   return htmlResponse(body, 200, {}, { noindex: true });
 }
@@ -867,7 +1000,11 @@ export async function docs(ctx) {
     baseUrl: ctx.url.origin,
     thumbnailUploads: uploadsEnabled(ctx.env),
   });
-  return htmlResponse(body, 200, {}, { cache: 'public, max-age=300' });
+  // The documentation is the same for everybody, so it is cacheable — but the
+  // page chrome carries the viewer's own session (username, unread bell), so a
+  // signed-in response is private. Same rule as the public profile page.
+  const cache = ctx.user ? 'private, no-store' : 'public, max-age=300';
+  return htmlResponse(body, 200, {}, { cache });
 }
 
 /** GET /favicon.svg */

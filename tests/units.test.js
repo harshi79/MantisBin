@@ -168,12 +168,19 @@ test('validation rules', () => {
   assert.equal(validateContent('a\u0000b', 100).value, 'ab');
   assert.equal(byteLength('é'), 2);
 
+  // Merged policy: 3–20 letters/digits/underscore. Every historic 4–6
+  // character handle still passes, so no existing account is invalidated.
   assert.equal(validateUsername('abcd').ok, true);
   assert.equal(validateUsername('ab12').ok, true);
-  assert.equal(validateUsername('abc').ok, false);
-  assert.equal(validateUsername('abcdefg').ok, false);
+  assert.equal(validateUsername('abc').ok, true);
+  assert.equal(validateUsername('abcdefg').ok, true);
+  assert.equal(validateUsername('a_b_c').ok, true);
+  assert.equal(validateUsername('a'.repeat(20)).ok, true);
+  assert.equal(validateUsername('ab').ok, false);
+  assert.equal(validateUsername('a'.repeat(21)).ok, false);
   assert.equal(validateUsername('a_b-c').ok, false);
   assert.equal(validateUsername('a b c').ok, false);
+  assert.equal(validateUsername('admin').ok, false);
   assert.equal(validatePassword('12345678').ok, true);
   assert.equal(validatePassword('1234567').ok, false);
 

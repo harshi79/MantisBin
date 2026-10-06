@@ -4,6 +4,7 @@ import { LANGUAGES, SITE } from '../config.js';
 import { burnLabel } from '../lib/burn.js';
 import { html } from '../lib/html.js';
 import { formatBytes, formatDateTime, formatNumber, relativeTime } from '../lib/validate.js';
+import { icon } from '../assets/icons.js';
 import { alertBox, layout } from './layout.js';
 
 function languageLabel(id) {
@@ -18,6 +19,8 @@ function languageLabel(id) {
  *   stats: { pastes: number, views: number, bytes: number, publicPastes: number },
  *   newKey?: string | null,
  *   notice?: string | null,
+ *   pinnedLimit?: number,
+ *   unread?: number,
  *   errors?: string[],
  * }} options
  */
@@ -27,7 +30,7 @@ export function myPastesPage(options) {
   const list = pastes.length
     ? html`<div class="list">
         ${pastes.map(
-          (paste) => html`<div class="list-item">
+          (paste) => html`<div class="list-item${paste.pinned ? ' is-pinned' : ''}">
             ${paste.thumbnail
               ? html`<a class="list-thumb" href="/p/${paste.id}" tabindex="-1" aria-hidden="true">
                   <img src="${paste.thumbnail}" alt="" width="80" height="42" loading="lazy" decoding="async" referrerpolicy="no-referrer">
@@ -36,6 +39,7 @@ export function myPastesPage(options) {
             <div class="list-main">
               <a class="list-title" href="/p/${paste.id}">${paste.title}</a>
               <div class="list-sub">
+                ${paste.pinned ? html`<span class="badge badge-pin">${icon('pin')} pinned</span>` : ''}
                 <span>${languageLabel(paste.language)}</span>
                 <span>${formatBytes(paste.size)}</span>
                 <span title="${formatDateTime(paste.created_at)}">${relativeTime(paste.created_at)}</span>
@@ -54,6 +58,17 @@ export function myPastesPage(options) {
             <div class="list-actions">
               <a class="btn btn-sm" href="/p/${paste.id}">Open</a>
               <a class="btn btn-sm" href="/p/${paste.id}/edit">Edit</a>
+              ${
+                paste.visibility === 'public'
+                  ? html`<form action="/me/pastes/${paste.id}/pin" method="post">
+                      <input type="hidden" name="pinned" value="${paste.pinned ? '0' : '1'}">
+                      <input type="hidden" name="next" value="/me">
+                      <button class="btn btn-sm${paste.pinned ? ' btn-ghost' : ''}" type="submit" title="${paste.pinned ? 'Remove from the top of your profile' : 'Show at the top of your profile'}">
+                        ${icon('pin')} ${paste.pinned ? 'Unpin' : 'Pin'}
+                      </button>
+                    </form>`
+                  : ''
+              }
               <form action="/p/${paste.id}/delete" method="post" data-confirm="1">
                 <button class="btn btn-sm btn-danger" type="submit" data-confirm-button>Delete</button>
               </form>
@@ -81,10 +96,22 @@ export function myPastesPage(options) {
       <div class="actions">
         <a class="btn btn-sm btn-primary" href="/">New paste</a>
         <a class="btn btn-sm" href="/u/${options.user.username}">Public profile</a>
+        <a class="btn btn-sm" href="/me/bookmarks">${icon('bookmark')} Saved</a>
+        <a class="btn btn-sm" href="/notifications">${icon('bell')} Notifications</a>
         <a class="btn btn-sm" href="/me/settings">Settings</a>
       </div>
     </div>
     <h2 class="section-title">My pastes</h2>
+    ${
+      // The phase-3 notification banner: one line, only when there is something
+      // to see, and never a modal or a pop-up.
+      options.unread
+        ? html`<div class="alert alert-ok notif-banner" role="status">
+            ${icon('bell')} <b>${options.unread} unread notification${options.unread === 1 ? '' : 's'}.</b>
+            <a class="btn btn-sm btn-primary" href="/notifications">Open notifications</a>
+          </div>`
+        : ''
+    }
     ${alertBox(options.errors, options.notice)}
     ${
       options.newKey

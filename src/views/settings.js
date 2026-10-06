@@ -83,8 +83,9 @@ export function settingsPage(options) {
         <input id="profile-url" type="text" readonly value="${options.profileUrl}" data-select-all>
         <button class="btn btn-sm btn-primary" type="button" data-copy="#profile-url">Copy link</button>
         <a class="btn btn-sm" href="/u/${account.username}">Open</a>
+        <a class="btn btn-sm" href="/me/profile">Customize profile</a>
       </div>
-      <p class="muted small">Only pastes you mark <b>Public</b> appear on your profile. Everything else stays unlisted, even from people who know your username.</p>
+      <p class="muted small">Only pastes you mark <b>Public</b> appear on your profile. Everything else stays unlisted, even from people who know your username. The profile's banner, accent, name effect, status and links live in <a href="/me/profile">Customize profile</a>.</p>
     </section>
 
     <section class="panel-card settings-section" aria-labelledby="password-heading">

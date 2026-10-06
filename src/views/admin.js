@@ -59,8 +59,134 @@ function header(session, active) {
       <button class="btn" type="submit">Sign out of admin</button></form>
   </div>
   <nav class="admin-tabs" aria-label="Administration">
-    ${[['overview', '/admin', 'Overview'], ['pastes', '/admin/pastes', 'Pastes'], ['users', '/admin/users', 'Accounts'], ['audit', '/admin/audit', 'Audit log']].map(([id, href, label]) => html`<a href="${href}" ${id === active ? html`aria-current="page"` : ''}>${label}</a>`)}
+    ${[['overview', '/admin', 'Overview'], ['pastes', '/admin/pastes', 'Pastes'], ['users', '/admin/users', 'Accounts'], ['tags', '/admin/tags', 'Tags'], ['stickers', '/admin/stickers', 'Stickers'], ['broadcast', '/admin/broadcast', 'Broadcast'], ['audit', '/admin/audit', 'Audit log']].map(([id, href, label]) => html`<a href="${href}" ${id === active ? html`aria-current="page"` : ''}>${label}</a>`)}
   </nav>`;
+}
+
+/**
+ * Tag management: the catalogue plus a form that awards a tag to one account.
+ *
+ * Tags are the only decoration an operator can grant, so they live in their own
+ * panel rather than inside the destructive confirmation flow: awarding is not a
+ * dangerous action, but it is still audited.
+ */
+function tagManager(ctx, data) {
+  const colors = data.colors || [];
+  const effects = data.effects || [];
+  return html`<section class="admin-panel"><div class="admin-panel-head"><div><h2>Profile tags</h2><p class="field-note">Award a tag to one account. Tags appear as chips beside the name on the public profile, and every award is recorded in the audit log.</p></div></div>
+    <form class="admin-filters" action="/admin/tags" method="post">
+      ${csrfField(data.session.csrf)}
+      <input type="hidden" name="action" value="award">
+      <div class="field grow"><label for="tag-user">Account</label><input id="tag-user" name="username" value="${data.username || ''}" maxlength="20" required placeholder="username"></div>
+      <div class="field grow"><label for="tag-label">Tag label</label><input id="tag-label" name="label" maxlength="30" required placeholder="Beta tester"></div>
+      <div class="field"><label for="tag-color">Colour</label><select id="tag-color" name="color">${colors.map((color) => html`<option value="${color.id}">${color.label}</option>`)}</select></div>
+      <div class="field"><label for="tag-effect">Effect</label><select id="tag-effect" name="effect">${effects.map((effect) => html`<option value="${effect.id}">${effect.label}</option>`)}</select></div>
+      <button class="btn btn-primary" type="submit">Award tag</button>
+    </form>
+    ${data.rows.length
+      ? html`<div class="admin-table-scroll" tabindex="0" role="region" aria-label="Tag catalogue"><table class="admin-table"><thead><tr><th>Tag</th><th>Colour</th><th>Effect</th><th>Awarded to</th><th>Holders</th></tr></thead><tbody>
+          ${data.rows.map((row) => html`<tr><td><b>${row.label}</b><span class="admin-sub">${row.id}</span></td><td>${row.color}</td><td>${row.effect || '—'}</td>
+            <td>${row.holders?.length ? row.holders.map((holder) => html`<span class="admin-tag-row"><a href="/u/${holder}">@${holder}</a> <form action="/admin/tags" method="post">${csrfField(data.session.csrf)}<input type="hidden" name="action" value="revoke"><input type="hidden" name="tag_id" value="${row.id}"><input type="hidden" name="username" value="${holder}"><button class="btn btn-sm btn-ghost" type="submit">Revoke</button></form></span>`) : html`<span class="muted small">nobody yet</span>`}</td>
+            <td>${row.count}</td></tr>`)}
+        </tbody></table></div>`
+      : html`<p class="muted">No tags yet. Awarding the first one creates it.</p>`}
+  </section>`;
+}
+
+/**
+ * Sticker management: the pack, an "add a row" form, and an importer that
+ * promotes a GIF search result into the pack.
+ *
+ * Import is two-step on purpose — pick a provider and a category/id, and the
+ * server re-resolves the image — so the pack can only ever contain an image
+ * that came from a named provider, never an arbitrary URL from a form post.
+ */
+function stickerManager(ctx, data) {
+  const values = data.values || {};
+  return html`<section class="admin-panel">
+    <div class="admin-panel-head"><div><h2>Sticker pack</h2>
+      <p class="field-note">Tokens are typed in pastes (<span class="mono">:wave:</span>) and resolve at render time, so editing the pack changes every paste at once. Images must be https; a row without an image falls back to its emoji.</p>
+    </div><span class="badge">${data.count}/${data.limit}</span></div>
+
+    ${alertBox(data.errors, null)}
+
+    <form class="admin-filters" action="/admin/stickers" method="post">
+      ${csrfField(data.session.csrf)}
+      <input type="hidden" name="action" value="add">
+      <div class="field"><label for="sticker-token">Token</label><input id="sticker-token" name="token" value="${values.token || ''}" maxlength="34" required placeholder=":wave:"></div>
+      <div class="field grow"><label for="sticker-label">Label <span class="muted">(alt text)</span></label><input id="sticker-label" name="label" value="${values.label || ''}" maxlength="40" placeholder="Wave"></div>
+      <div class="field"><label for="sticker-emoji">Emoji ${icon('star')}</label><input id="sticker-emoji" name="emoji" maxlength="16" placeholder="👋"></div>
+      <div class="field grow"><label for="sticker-url">Image URL</label><input id="sticker-url" name="url" maxlength="500" placeholder="https://…/wave.gif"></div>
+      <button class="btn btn-primary" type="submit">Add sticker</button>
+    </form>
+
+    <form class="admin-filters" action="/admin/stickers" method="post">
+      ${csrfField(data.session.csrf)}
+      <input type="hidden" name="action" value="import">
+      <input type="hidden" name="source" value="neko">
+      <div class="field grow"><label for="sticker-category">Import an anime GIF</label>
+        <select id="sticker-category" name="category">${data.categories.map((category) => html`<option value="${category.id}">${category.emoji} ${category.label}</option>`)}</select></div>
+      <div class="field grow"><label for="sticker-import-token">Token <span class="muted">(optional)</span></label><input id="sticker-import-token" name="token" maxlength="34" placeholder=":anime-hug:"></div>
+      <button class="btn" type="submit">Fetch + add</button>
+    </form>
+
+    ${data.rows.length
+      ? html`<div class="sticker-admin-grid">
+          ${data.rows.map(
+            (row) => html`<div class="sticker-admin-card">
+              <div class="sticker-admin-preview">${row.url ? html`<img src="${row.url}" alt="" width="56" height="56" loading="lazy" decoding="async" referrerpolicy="no-referrer">` : html`<span class="sticker-admin-emoji">${row.emoji || '?'}</span>`}</div>
+              <div class="sticker-admin-meta">
+                <span class="mono small">${row.token}</span>
+                <span class="muted small">${row.label || 'no label'}${row.emoji ? ` · ${row.emoji}` : ''}</span>
+                <span class="muted small">added ${date(row.created_at)}</span>
+              </div>
+              <form action="/admin/stickers" method="post">
+                ${csrfField(data.session.csrf)}
+                <input type="hidden" name="action" value="delete">
+                <input type="hidden" name="id" value="${row.id}">
+                <button class="btn btn-sm btn-danger" type="submit">Remove</button>
+              </form>
+            </div>`,
+          )}
+        </div>`
+      : html`<p class="muted">The pack is empty. Pastes render <span class="mono">:wave:</span> as the built-in emoji until a row is added.</p>`}
+  </section>`;
+}
+
+/**
+ * Broadcast composer: one announcement to every active account, with the
+ * recipient count, the cap and the recent sends in front of the operator.
+ */
+function broadcastComposer(ctx, data) {
+  const values = data.values || {};
+  return html`<section class="admin-panel">
+    <div class="admin-panel-head"><div><h2>Announcement</h2>
+      <p class="field-note">Writes one notification to every active account. Suspended accounts are skipped, and the send is capped at ${data.cap} accounts. Use it for service news, not for content.</p>
+    </div><span class="badge">${data.recipients} recipient${data.recipients === 1 ? '' : 's'}</span></div>
+
+    ${alertBox(data.errors, null)}
+
+    <form class="admin-broadcast" action="/admin/broadcast" method="post">
+      ${csrfField(data.session.csrf)}
+      <div class="field"><label for="broadcast-title">Title</label>
+        <input id="broadcast-title" name="title" value="${values.title || ''}" maxlength="${data.titleMax}" required placeholder="Scheduled maintenance"></div>
+      <div class="field"><label for="broadcast-message">Message</label>
+        <textarea id="broadcast-message" name="message" rows="4" maxlength="${data.messageMax}" required placeholder="MantisBin will be read-only for ten minutes at 09:00 UTC.">${values.message || ''}</textarea></div>
+      <div class="field"><label for="broadcast-link">Link <span class="muted">(optional)</span></label>
+        <input id="broadcast-link" name="link" maxlength="300" placeholder="/docs or https://…" aria-describedby="broadcast-link-help">
+        <p class="field-note" id="broadcast-link-help">A path on this site, or an https:// address. Anything else is refused.</p></div>
+      <div class="submit-row"><span class="muted small">Everyone with an account can read this in ${icon('bell')} notifications.</span>
+        <button class="btn btn-primary" type="submit">Send announcement</button></div>
+    </form>
+
+    ${data.recent.length
+      ? html`<div class="admin-table-scroll" tabindex="0" role="region" aria-label="Recent announcements"><table class="admin-table"><thead><tr><th>Sent</th><th>Title</th><th>Recipients</th></tr></thead><tbody>
+          ${data.recent.map(
+            (row) => html`<tr><td>${date(row.sent_at, true)}</td><td><b>${row.title || '—'}</b><span class="admin-sub mono">${row.broadcast_id}</span></td><td>${row.recipients}</td></tr>`,
+          )}
+        </tbody></table></div>`
+      : html`<p class="muted">Nothing has been announced yet.</p>`}
+  </section>`;
 }
 
 function auditTable(rows) {
@@ -143,14 +269,14 @@ function userList(ctx, data) {
     ${data.rows.length ? html`<div class="admin-table-scroll" tabindex="0" role="region" aria-label="Accounts"><table class="admin-table"><thead><tr><th>Account</th><th>Joined (UTC)</th><th>Retained pastes</th><th>Status</th><th>Actions</th></tr></thead><tbody>
       ${data.rows.map((row) => html`<tr><td><b>${row.username}</b><span class="admin-sub">#${row.id}</span></td><td>${date(row.created_at)}</td><td>${row.pastes}</td>
         <td><span class="badge">${row.suspended_at != null ? 'Suspended' : 'Active'}</span></td>
-        <td><div class="admin-row-actions">${row.suspended_at != null ? actionLink('restore_user', row.id, 'Restore') : actionLink('suspend_user', row.id, 'Suspend')}${actionLink('revoke_user', row.id, 'Revoke access')}${actionLink('delete_user', row.id, 'Delete', true)}</div></td></tr>`)}
+        <td><div class="admin-row-actions">${row.suspended_at != null ? actionLink('restore_user', row.id, 'Restore') : actionLink('suspend_user', row.id, 'Suspend')}${actionLink('revoke_user', row.id, 'Revoke access')}<a class="btn btn-sm btn-ghost" href="/admin/tags?u=${encodeURIComponent(row.username)}">Tags</a>${actionLink('delete_user', row.id, 'Delete', true)}</div></td></tr>`)}
     </tbody></table></div>` : empty('No accounts match these filters.')}
     ${pager(ctx, data)}
   </section>`;
 }
 
 export function adminPage(ctx, session, active, data) {
-  const body = active === 'overview' ? overview(data) : active === 'pastes' ? pasteList(ctx, data) : active === 'users' ? userList(ctx, data) : html`
+  const body = active === 'overview' ? overview(data) : active === 'pastes' ? pasteList(ctx, data) : active === 'users' ? userList(ctx, data) : active === 'tags' ? tagManager(ctx, data) : active === 'stickers' ? stickerManager(ctx, data) : active === 'broadcast' ? broadcastComposer(ctx, data) : html`
     <section class="admin-panel"><div class="admin-panel-head"><div><h2>Audit log</h2><p class="field-note">Shared-password access is identified by session, not by individual person. Times are UTC.</p></div></div>${auditTable(data.rows)}${pager(ctx, data)}</section>`;
   return shell(ctx, 'Administration', html`<div class="admin-shell">${header(session, active)}
     ${ctx.url.searchParams.get('done') === '1' ? alertBox([], 'Action completed and recorded in the audit log.') : ''}

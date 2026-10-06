@@ -39,6 +39,13 @@ APP_SECRET="change-me-to-a-long-random-string"
 # Set to "off" to disable uploading entirely (the URL field is still offered).
 # THUMBNAIL_UPLOADS="off"
 
+# --- GIF search (optional) ---------------------------------------------------
+# Nekos.best needs no key. Giphy runs on its published public beta key, which is
+# a shared, revocable quota: set your own key to raise the limit.
+#   wrangler secret put GIPHY_API_KEY
+# The key is used server-side only — it never reaches a browser.
+# GIPHY_API_KEY="your-giphy-key"
+
 # --- Local Node dev server (scripts/dev.js) only ---
 # Leave DB_FILE unset (or ":memory:") to run without Turso credentials.
 # DB_FILE=".data/mantisbin.db"

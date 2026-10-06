@@ -3,12 +3,16 @@
 **Stay sharp. Paste faster.**
 
 A fast, minimal paste-sharing utility for plain text and code.
-**PASTE → SAVE → SHARE → COPY** — nothing else.
+**PASTE → SAVE → SHARE → COPY** — nothing else, unless you opt in.
 
 - No accounts required (optional accounts raise the limit and unlock edit/delete)
-- Optional public profiles: accounts can publish pastes to an opt-in `/u/name` page with a generated avatar; everything else stays unlisted
+- Optional public profiles: accounts can publish pastes to an opt-in `/u/name` page with a generated avatar, banner, accent colour, links, emoji status, badges and admin-awarded tags; everything else stays unlisted
+- Line-level rich formatting: a font, a size and one of 11 palette colours per line, plus `:wave:`-style shortcodes and standalone image lines — the stored text stays byte-exact, so `/raw`, download, fork and the API still hand back exactly what was pasted
+- Social on public pastes only: follow accounts, bookmark pastes, leave one of 8 reactions and get a notification bell for follows, reactions and announcements. Still no feed, no comments and no global search
+- Stickers and GIF search in the editor: an admin-curated pack plus Giphy search/trending and 24 Nekos.best anime categories, proxied same-origin. No API key required, and a provider outage degrades to the emoji pack instead of an error
+- One private admin control room for the merged extras: sticker curation, broadcasts to every account, and the existing paste/account moderation and audit log
 - Account settings: change password, manage sessions, delete account (pastes are kept but anonymised)
-- Unlisted pastes only: no feeds, no search, no discovery, `noindex` everywhere it matters
+- Unlisted by default: no feed, no global search and no trending page; only pastes you explicitly publish appear on your profile, and paste pages stay `noindex`
 - Filename-first editor: new pastes start as `untitled.txt`, and the extension picks the language (`app.py` → Python) unless you choose one explicitly
 - Manual syntax highlighting for 27 languages, rendered server-side (zero client JS needed to read a paste)
 - Optional password protection: a paste stays locked — title and content both hidden — until the passphrase is verified
@@ -37,6 +41,7 @@ npm test           # end-to-end + unit tests (node:test)
 npm run typecheck  # tsc --noEmit over JSDoc-typed JS
 npm run build      # wrangler deploy --dry-run (bundles the Worker + assets)
 npm run clean-expired   # manual expiration sweep
+npm run smoke http://localhost:8787   # post-deploy checklist (read-only)
 npm run check      # tests + typecheck + Worker dry-run build
 ```
 
@@ -59,6 +64,21 @@ or a validation error keeps it open so it can be reviewed.
   Ctrl/Command+Enter saves from anywhere in the form.
 - **Reading:** Copy and Share are the main actions. Download, Duplicate, QR and
   owner actions live under **More actions**; Raw and Wrap stay with the code.
+- **Formatting:** the line toolbar applies a font, size or palette colour to the
+  selected lines (or the line the caret sits on) and writes only the formatting
+  overlay — the text itself is never rewritten. `:wave:`-style shortcodes and
+  standalone image links render as emoji/GIFs, and the same paste reads as plain
+  text without JavaScript.
+- **Media panel:** a disclosure under the editor searches the curated sticker
+  pack, Giphy (search or trending) and Nekos.best categories, and inserts the
+  chosen result at the caret. It is a progressive enhancement; the shortcodes
+  work by hand without it.
+- **Publishing:** a paste is unlisted until the prominent **Publish** control in
+  the settings area is switched on — that is the only thing that puts it on your
+  public profile, and switching it off removes it immediately.
+- **Your profile:** `/me/profile` customises accent, banner, links, emoji status,
+  name effect and effect strength with a live preview of the real stylesheet;
+  `/u/name` is the public result.
 - **Progressive enhancement:** forms and disclosures work without JavaScript.
   JavaScript adds local draft recovery, a bounded line-number gutter, instant
   themes, and copy/share feedback. No UI framework or font downloads are needed.
@@ -111,6 +131,15 @@ administration page without affecting the public app.
   existing paste URLs stay readable. Account deletion preserves pastes but makes
   them anonymous and unlisted. Revoke keys/sessions permanently; restoration
   requires a fresh login and new keys. Suspended users cannot use existing keys.
+- **Stickers:** curate the editor's sticker pack (at most 400). A sticker is a
+  token like `:fire:` with an emoji, an `https` image URL, or both; **Import**
+  takes a Giphy or Nekos.best id and re-resolves the image provider-side, so a
+  URL typed into the form is never trusted blindly. Deletions are confirmed and
+  audited.
+- **Broadcast:** send one announcement (title ≤ 120, message ≤ 500 characters,
+  optional `https` link) to every account, up to 5000 recipients. Delivery is
+  batched and deduplicated per account, and the result reports how many
+  notifications were written.
 - **Cleanup:** explicitly confirmed manual batches of up to 200 expired/consumed
   pastes. Eligibility is checked again inside the transaction. Scheduled hourly
   cleanup is unchanged; a manual action does not prove the cron is healthy.
@@ -151,6 +180,14 @@ requests. The build is a **dry run**, not a deployment, and needs no production
 credentials. The Worker compatibility date is deliberately unchanged: package
 updates do not implicitly opt production into new runtime behavior.
 
+`npm run smoke <base-url>` is the checklist an operator runs after a deploy:
+health, `/api/meta`, the editor, `/docs`, the sticker and GIF endpoints,
+`robots.txt`, the signed-out `401` on the notification poll, and the
+`noindex`/cache headers — plus a create → read-back byte-exact → delete
+round-trip with `--write --key mb_…`. CI rehearses the same script on every
+push against a locally started server backed by in-memory SQLite, so a route,
+asset or header that breaks fails the build before it can ship.
+
 ## Deploy to Cloudflare
 
 1. Create a Turso database and note the URL + auth token:
@@ -169,7 +206,9 @@ updates do not implicitly opt production into new runtime behavior.
    wrangler secret put APP_SECRET      # random string; pseudonymises IPs for view counts
    ```
 
-3. Point `vars.SITE_URL` in `wrangler.jsonc` at your domain, then:
+3. Deploy — there is nothing else to configure. Every URL the app writes (API
+   links, QR codes, `theme.css`) is built from the request's own origin, and the
+   merged features are on by default:
 
    ```bash
    npm run deploy
@@ -215,6 +254,27 @@ never lingers.
 Local dev *with* Turso: copy `.dev.vars.example` to `.dev.vars` and fill in the
 values — `npm run dev` then uses the real database.
 
+### Deploy smoke checklist
+
+Nothing below needs a new environment variable: the required set stays
+`TURSO_DATABASE_URL`, `TURSO_AUTH_TOKEN` and `APP_SECRET`, and everything the
+merge added is on by default (`ADMIN_PASSWORD` remains optional, as do the
+thumbnail and Giphy overrides).
+
+1. `npm run smoke https://your-domain` — health, `/api/meta`, the editor,
+   `/docs`, the sticker and GIF endpoints, `robots.txt`, the signed-out `401`
+   and the `noindex`/cache headers. Add `--write --key mb_…` for the paste
+   round-trip. Warnings (a provider the Worker cannot reach, an empty sticker
+   pack, administration disabled) are expected states, not failures.
+2. Open `/` — the media panel's **Stickers** and **GIFs** tabs list the pack and
+   (network permitting) Giphy results, and `/docs#media` documents both.
+3. `/admin` → **Stickers** (import one from Giphy) and **Broadcast** (send
+   yourself a test announcement, then check the bell).
+4. Confirm the hourly cron is registered (Dashboard → Worker → Settings →
+   Triggers) or run `npm run clean-expired` for a manual sweep.
+5. Optional extras: `GIPHY_API_KEY` (a secret) replaces the shared public beta
+   key, and `CATBOX_USERHASH` makes thumbnail uploads authenticated.
+
 ---
 
 ## Routes
@@ -240,6 +300,17 @@ values — `npm run dev` then uses the real database.
 | `POST /me/delete` | Delete account, anonymise owned pastes |
 | `GET /u/:username` | Public profile: avatar, stats, public pastes (indexable, opt-in) |
 | `GET /u/:username/avatar.svg` | Deterministic avatar image (immutable) |
+| `GET /u/:username/theme.css` | Generated profile stylesheet (`?preview=1` for the owner's unsaved values) |
+| `POST /u/:username/follow` | Follow or unfollow (signed in; the profile hero posts here) |
+| `GET /u/:username/followers`, `GET /u/:username/following` | Follower and following lists |
+| `GET /me/profile`, `POST /me/profile` | Profile customiser: accent, banner, links, emoji status, name effect |
+| `POST /me/pastes/:id/pin` | Pin/unpin a public paste (max 3; pinned pastes lead the profile) |
+| `GET /notifications`, `POST /notifications/read` | Notification list and mark-as-read |
+| `GET /me/bookmarks` | Saved pastes |
+| `POST /p/:id/bookmark`, `POST /p/:id/react` | Save a paste, or add one of 8 reactions |
+| `GET /api/stickers` | The curated sticker pack (public, cacheable, `noindex`) |
+| `GET /api/gifs?q=`, `GET /api/gifs?category=` | Giphy search/trending, or one Nekos.best category (per-IP limited) |
+| `GET /api/notifications/unread` | Unread count for the header bell (`401` signed out) |
 | `GET /api/users/:username` | Profile metadata as JSON (public) |
 | `GET /docs` | API documentation |
 | `GET /api/health`, `GET /api/meta` | Liveness + vocabularies/limits (public) |
@@ -311,13 +382,41 @@ consumption. The creator picks one of three modes (`after reading` on the editor
 
 - Paste IDs: 8 random base62 characters (`/p/a8Kx92Lm`) — no sequential ids, no custom slugs.
 - Expirations: 10 min, 1 h, 6 h, 1 day, 1 week, 30 days, 1 year, **never**. Expired rows are deleted.
-- Titles: required, ≤ 120 chars. Usernames: 4–6 letters/digits. Passwords: ≥ 8 chars, PBKDF2-SHA256 (100k — the Cloudflare Workers ceiling).
+- Titles: required, ≤ 120 chars. Usernames: 3–20 letters, digits and underscores (existing 4–6 handles keep working; reserved names like `admin` and `api` are refused). Passwords: ≥ 8 chars, PBKDF2-SHA256 (100k — the Cloudflare Workers ceiling).
 - Paste passphrases (optional): ≥ 6 chars, ≤ 256, stored only as a PBKDF2-SHA256 hash with a per-paste salt. Unlocking lasts 30 minutes in an `HttpOnly; SameSite=Lax` cookie, and is capped at 10 attempts / 15 min per paste + IP (`429` + `Retry-After`).
 - Burn modes: `never` (default), `view`, `read`. A burned paste is deleted, not archived — the winning read is the only read.
 - Duplicating counts as a content read: the copy follows the actor's limits (5 MB / 60 per hour per IP anonymous, 10 MB / 300 per hour per key), and duplicating a one-time paste consumes it.
 - View counts dedupe repeat visitors per paste for 6 hours (IPs stored only as HMAC hashes).
 - Reads via API: 3000/hour per IP. Auth endpoints: 40/15 min per IP. All limits are abuse guards, not quotas.
 - Highlighting + linkification are skipped above 256 KB so huge pastes render instantly; `/raw` always returns exact bytes. Auto language detection examines at most a 64 KiB prefix and resolves a paste over the 256 KiB heavy-work threshold to plaintext.
+
+### Profiles, social and media (2.4 merge)
+
+Everything here is optional and sits off the paste path: an unlisted paste
+behaves exactly as it did before the merge.
+
+- Profiles: display name ≤ 40, bio ≤ 280, status text ≤ 60 plus up to 3 emoji or
+  one `:shortcode:`, at most 6 links (labels ≤ 40), banner URL ≤ 500. Pinning is
+  capped at 3 per account. `/u/:name/theme.css` is immutable and versioned; the
+  owner's `?preview=1` view is `no-store`.
+- Formatting: at most 2000 formatted lines and 64 KiB of overlay per paste,
+  1-based line numbers, unknown ids ignored at render time. `content` is always
+  the exact bytes that were pasted.
+- Social writes: 240 actions/hour per account (follow, bookmark, react).
+  Pinning has its own 60/hour bucket, the unread bell polls at most 1200/hour,
+  and notification lists are 20 per page.
+- Media: one shared 240/hour per-IP bucket for `/api/stickers` and `/api/gifs`;
+  at most 24 results per search (48 on request), queries trimmed to 60
+  characters, and every returned URL is re-checked against the provider's image
+  hosts before it reaches a browser.
+- Sticker pack: at most 400 entries; tokens ≤ 34 characters (`:wave:`), labels
+  ≤ 40, emoji ≤ 8.
+- Broadcasts: at most 5000 recipients per send, title ≤ 120 and message ≤ 500
+  characters, delivered in 100-row batches and deduplicated to one notification
+  per account. Publish fan-out notifies at most 500 followers per paste.
+- Retention: read notifications are deleted after 30 days (unread ones are
+  kept); profile-view dedupe rows, rate-limit buckets, sessions and expired or
+  burned pastes are pruned by the same hourly sweep.
 
 ## Release roadmap
 
@@ -483,6 +582,26 @@ Before calling 2.2 complete, update the API docs and README, add migration notes
 | 4. Auto language detection | ✅ `tests/detect.test.js` | ✅ | none | ✅ test / typecheck / build |
 | 5. QR sharing | ✅ `tests/qr.test.js` | ✅ | none | ✅ test / typecheck / build |
 
+### MantisBin 2.4 — the VibeBin merge (shipped)
+
+VibeBin's product surface was ported onto MantisBin's architecture: Cloudflare
+Workers + Assets, Turso (libSQL), **no new environment variables**, no email or
+account-recovery flows, and Mantis's invariants intact (byte-exact `/raw`,
+exactly-once burn, strict CSP, zero third-party JavaScript, unlisted by
+default). `MERGE-PLAN.md` holds the decision record and the full ledger.
+
+| Phase | Shipped |
+| --- | --- |
+| 0 | 8 profile/social tables plus `formatting`, `title_color` and `pinned` columns — append-only migrations; hybrid username rule (3–20, legacy handles untouched) |
+| 1 | Line-level formatting (fonts, sizes, palette), editor toolbar, `:wave:` shortcodes, `/raw` still byte-exact |
+| 2 | Profiles: banner, accent, links, emoji status, badges, tags, name effects, view counts, `/u/:name/theme.css` |
+| 3 | Follows, bookmarks, 8 reactions, notifications and the header bell — only for public, unprotected, owned pastes |
+| 4 | Curated sticker pack, Giphy + Nekos.best GIF search, media lines, admin Stickers/Broadcast tabs |
+| 5 | Hardening pass, `/docs` + README refresh, CI smoke rehearsal, deploy smoke checklist |
+
+The suite is **301 tests**; `npm run check` (tests + typecheck + Worker dry-run
+build) is green on Node 22 and 24.
+
 ## Architecture
 
 ```
@@ -491,17 +610,23 @@ src/
   app.js             routing, request context, sessions, security headers, errors
   config.js          every limit/option in one place
   db/
-    schema.js        SQLite schema (users, sessions, pastes, api_keys, paste_views, rate_limits)
+    schema.js        SQLite schema + append-only migrations (pastes, users, sessions,
+                     api_keys, views, rate_limits, profiles, follows, bookmarks,
+                     reactions, notifications, stickers, tags, audit)
     turso.js         libSQL adapter (Workers) — the only runtime dependency (@libsql/client)
     node-sqlite.js   Node built-in SQLite adapter (dev + tests), same SQL
   lib/               crypto, auth/sessions/keys, pastes, access (read authorisation),
-                     unlock (passphrase + signed unlock cookie), ratelimit, detect, qr, avatar, highlighter, html, http, maintenance
-  routes/            web.js (HTML forms) + api.js (JSON) + profile.js (profiles/settings)
+                     unlock (passphrase + signed unlock cookie), ratelimit, detect, qr,
+                     avatar, highlighter, html, http, maintenance, formatting, profiles,
+                     nameEffects, social, stickers, media
+  routes/            web.js (HTML forms) + api.js (JSON) + profile.js (settings) +
+                     social.js (follows/notifications) + media.js (pack/GIF proxies)
   views/             server-rendered pages (escaping-by-construction tagged templates)
   assets/mark.js     the mantis mark: one geometry, reused as inline SVG, favicon, logo
 public/              app.css, app.js (progressive enhancement only), robots.txt
-scripts/             dev.js (local server), cleanup.js (manual sweep)
+scripts/             dev.js (local server), cleanup.js (manual sweep), smoke.js (deploy check)
 tests/               node:test suites against in-memory SQLite
+.github/workflows/   ci.yml — npm run check + the smoke rehearsal on every push
 ```
 
 Design rules the codebase follows:
@@ -514,6 +639,9 @@ Design rules the codebase follows:
 - **One source of truth** for validation (config + `lib/validate.js`) shared by the HTML
   and JSON paths, enforced server-side.
 - **No Node-only APIs in the Worker path**: WebCrypto, fetch, and libSQL over WebSocket/HTTP.
+- **Third-party code stays out of the browser**: the only external fetches are
+  provider proxies made by the Worker (`/api/gifs`, thumbnail uploads), and
+  `script-src 'self'` means a compromised CDN cannot run anything here.
 
 ## Security notes
 
@@ -574,6 +702,19 @@ Design rules the codebase follows:
   receives content, title or passphrase. Locked QR pages hide the title/content,
   and the encoded link still opens the normal password gate.
 - Public profiles are strictly opt-in: only pastes their owner marks `public` appear on `/u/:username` (and in `GET /api/users/:username`), and flipping a paste back to unlisted removes it immediately. Anonymous pastes can never be public. Profile pages are the only indexed discovery surface; paste pages stay `noindex` and `robots.txt` still disallows `/p/`.
+- Social writes are rate limited per account (240 actions/hour; pinning 60/hour),
+  and a notification is only ever created for a public, unprotected paste owned by
+  someone else — following or reacting to an unlisted paste can never surface it.
+- Media proxies: the Giphy key stays server-side and never reaches a browser, the
+  picker calls the same-origin `/api/gifs` (`connect-src 'self'`), every returned
+  URL is re-checked against the provider's image hosts, and a provider outage
+  answers `{ "gifs": [], "degraded": true }` instead of an error. Stickers are
+  re-validated on the way out of the database (token shape, `https` URL, emoji),
+  so a hand-edited row cannot inject a `javascript:` or `data:` URL into a page.
+- Retention: read notifications are pruned after 30 days and unread ones are
+  kept; profile-view dedupe rows and rate-limit buckets are pruned by the same
+  hourly sweep as paste views and expired/burned pastes. Sticker curation and
+  broadcasts are written to the same audit log as moderation.
 - Account deletion is password-confirmed and anonymises rather than orphans: sessions, API keys and the user row are deleted, while owned pastes keep working with the owner cleared and visibility reset to unlisted. Changing a password revokes every other session.
 - Passwords: PBKDF2-HMAC-SHA256, 100 000 iterations (the Cloudflare Workers ceiling —
   `deriveBits` throws `NotSupportedError` above it), per-user salt; constant-time compares.
@@ -583,7 +724,11 @@ Design rules the codebase follows:
 - Sessions: 256-bit random tokens in `HttpOnly; SameSite=Lax` cookies; only SHA-256 hashes stored.
 - API keys: `mb_` + 32 random chars, stored hashed, shown once, max 3 per account.
 - Paste pages send `X-Robots-Tag: noindex, nofollow` + `<meta name="robots">`; `robots.txt`
-  disallows `/p/`, `/me`, `/login`, `/register`, `/api/` while keeping `/` and `/docs` indexable.
+  disallows `/p/`, `/admin`, `/me`, `/notifications`, `/login`, `/register` and `/api/`,
+  while keeping `/`, `/docs` and opt-in profiles indexable. The merged JSON endpoints
+  (`/api/stickers`, `/api/gifs`, `/api/notifications/unread`) carry the same header, and a
+  public profile is only cacheable for signed-out readers: a signed-in copy carries that
+  viewer's own follow state and is `private, no-store`.
 - Raw endpoint sends `nosniff` + `Content-Disposition` so pastes cannot spoof content types.
 - Request bodies are size-capped before parsing; oversized inputs never echo back into forms.
 

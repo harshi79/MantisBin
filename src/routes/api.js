@@ -17,6 +17,11 @@
 import {
   BURN_MODES,
   COOKIE,
+  EMOJI_SHORTCODES,
+  FORMAT,
+  FORMAT_COLORS,
+  FORMAT_FONTS,
+  FORMAT_SIZES,
   DEFAULT_BURN_MODE,
   DEFAULT_FILENAME,
   DEFAULT_VISIBILITY,
@@ -38,6 +43,7 @@ import { authenticateApiKey } from '../lib/auth.js';
 import { appSecret, canReadPaste } from '../lib/access.js';
 import { burnModeOf, claimBurnForRead } from '../lib/burn.js';
 import { resolvePasteLanguage } from '../lib/detect.js';
+import { normalizeFormatting, parseFormatting } from '../lib/formatting.js';
 import { HttpError, jsonResponse, parseJson, readBody, textResponse } from '../lib/http.js';
 import { consume } from '../lib/ratelimit.js';
 import {
@@ -64,6 +70,7 @@ import {
   validateTitle,
 } from '../lib/validate.js';
 import { createPaste, deletePaste, getPaste, listUserPastes, updatePaste } from '../lib/pastes.js';
+import { announcePublish } from '../lib/social.js';
 import { allowedThumbnailHosts, safeThumbnailUrl, uploadProvider, uploadProviders, uploadsEnabled, validateThumbnailUrl } from '../lib/thumbnail.js';
 import { maxBytesFor } from './web.js';
 
@@ -105,7 +112,16 @@ export function serializePaste(paste, origin, options = {}) {
      */
     thumbnailUrl: safeThumbnailUrl(paste.thumbnail_url, options.env),
   };
-  if (options.content) base.content = paste.content;
+  if (options.content) {
+    base.content = paste.content;
+    /**
+     * Line-level formatting overlay, or null. `content` is always the exact
+     * text; this only describes how to *display* it, so a client that ignores
+     * the field still renders the paste correctly.
+     */
+    const formatting = parseFormatting(paste.formatting);
+    base.formatting = formatting.lines.length ? formatting : null;
+  }
   return base;
 }
 
@@ -158,7 +174,7 @@ async function requireKey(ctx) {
 
 /** GET /api/health */
 export async function health(ctx) {
-  return jsonResponse({ status: 'ok', service: SITE.name, time: new Date(ctx.now * 1000).toISOString() });
+  return jsonResponse({ status: 'ok', service: SITE.name, time: new Date(ctx.now * 1000).toISOString() }, 200, {}, { noindex: true });
 }
 
 /** GET /api/meta */
@@ -182,6 +198,21 @@ export async function meta(ctx) {
       highlightBytes: LIMITS.highlightMaxBytes,
       passphraseMin: LIMITS.passphraseMin,
       passphraseMax: LIMITS.passphraseMax,
+      formattingLines: FORMAT.maxLines,
+      formattingBytes: FORMAT.maxBytes,
+    },
+    /**
+     * Line formatting vocabulary. `content` is always the exact text; an
+     * optional `formatting` overlay next to it maps 1-based line numbers to
+     * these ids. Unknown ids are ignored at render time, and a paste stores at
+     * most `limits.formattingLines` entries.
+     */
+    formatting: {
+      fonts: FORMAT_FONTS.map((font) => ({ id: font.id, label: font.label })),
+      sizes: FORMAT_SIZES.map((size) => ({ id: size.id, label: size.label, px: size.px })),
+      colors: FORMAT_COLORS.map((color) => ({ id: color.id, label: color.label })),
+      shape: '{"v":1,"lines":[{"line":3,"font":"sans","size":"lg","color":"red"}]}',
+      shortcodes: EMOJI_SHORTCODES,
     },
     burnModes: BURN_MODES.map((mode) => ({ id: mode.id, label: mode.label })),
     defaultBurnMode: DEFAULT_BURN_MODE,
@@ -213,7 +244,7 @@ export async function meta(ctx) {
       windowSeconds: RATE_LIMITS.unlock.window,
     },
     rateLimits: RATE_LIMITS,
-  });
+  }, 200, {}, { noindex: true });
 }
 
 /** POST /api/pastes */
@@ -248,6 +279,14 @@ export async function create(ctx) {
   // A thumbnail is any https image URL — the API never accepts image bytes.
   const thumbnail = validateThumbnailUrl(body.thumbnailUrl ?? body.thumbnail_url, ctx.env);
   if (!thumbnail.ok) throw new HttpError(400, thumbnail.error);
+  // Line formatting rides beside the text (never inside it). Accepts the object
+  // or its JSON string; unusable ids and out-of-range lines are dropped rather
+  // than rejected, because formatting is a display hint and must never cost a
+  // caller their paste.
+  const formatting = normalizeFormatting(body.formatting, {
+    lineCount: String(content.value).split('\n').length,
+  });
+  if (!formatting.ok) throw new HttpError(400, formatting.error || 'Formatting could not be stored.');
   const paste = await createPaste(ctx.db, {
     title: title.value,
     content: content.value,
@@ -260,8 +299,14 @@ export async function create(ctx) {
     burnMode: burnAfter.value,
     visibility: visibility.value,
     thumbnailUrl: thumbnail.value,
+    formatting: formatting.value,
     now: ctx.now,
   });
+
+  // A public paste is news for the author's followers, exactly as it is through
+  // the web form. `announcePublish` decides whether the paste qualifies at all
+  // and the `.catch` keeps a fanout failure from costing the caller the paste.
+  await announcePublish(ctx.db, paste, ctx.now).catch(() => 0);
 
   return jsonResponse(serializePaste(paste, ctx.url.origin, { content: false, env: ctx.env }), 201);
 }
@@ -363,8 +408,19 @@ export async function fork(ctx, params) {
     burnMode: burnAfter.value,
     visibility: copyVisibility.value,
     thumbnailUrl: copyThumbnail.value,
+    // The copy keeps the source's presentation when the copier did not ask for
+    // anything else; an explicit `formatting` (including null) decides instead.
+    formatting:
+      overrides.formatting === undefined
+        ? normalizeFormatting(source.formatting, { lineCount: content.value.split('\n').length }).value
+        : normalizeFormatting(overrides.formatting, { lineCount: content.value.split('\n').length }).value,
     now: ctx.now,
   });
+
+  // A copy the caller published on their own profile is a new paste for their
+  // followers — the web fork path announces through `POST /p`, so the API does
+  // the same here.
+  await announcePublish(ctx.db, copy, ctx.now).catch(() => 0);
 
   return jsonResponse(serializePaste(copy, ctx.url.origin, { env: ctx.env }), 201, {}, { noindex: true });
 }
@@ -510,6 +566,13 @@ export async function update(ctx, params) {
   const thumbnailKey = Object.hasOwn(body, 'thumbnailUrl') ? 'thumbnailUrl' : Object.hasOwn(body, 'thumbnail_url') ? 'thumbnail_url' : null;
   const thumbnail = thumbnailKey ? validateThumbnailUrl(body[thumbnailKey], ctx.env) : { ok: true, value: undefined };
   if (!thumbnail.ok) throw new HttpError(400, thumbnail.error);
+  // Key presence again: an absent `formatting` keeps the stored overlay (so a
+  // content edit that does not mention styling leaves it alone), `null`/'' or
+  // an overlay with no usable entries clears it, an object replaces it.
+  const formatting = Object.hasOwn(body, 'formatting')
+    ? normalizeFormatting(body.formatting, { lineCount: String(content.value).split('\n').length })
+    : { ok: true, value: undefined };
+  if (!formatting.ok) throw new HttpError(400, formatting.error || 'Formatting could not be stored.');
   const result = await updatePaste(
     ctx.db,
     params.id,
@@ -525,13 +588,21 @@ export async function update(ctx, params) {
       burnMode: burnAfter.value,
       visibility: visibility.value,
       thumbnailUrl: thumbnail.value,
+      formatting: formatting.value,
     },
     ctx.now,
   );
   if (!result.ok) throw new HttpError(result.reason === 'missing' ? 404 : 403);
 
+  // Editing a paste *into* public is the same news as creating one; the
+  // per-paste dedupe key makes a repeat invisible, and `existing` is the row as
+  // it was before this write.
+  if (visibility.value === 'public' && String(existing.visibility ?? '') !== 'public') {
+    await announcePublish(ctx.db, { ...existing, visibility: 'public' }, ctx.now).catch(() => 0);
+  }
+
   const updated = await getPaste(ctx.db, params.id, { content: true, now: ctx.now });
-  return jsonResponse(serializePaste(updated, ctx.url.origin, { content: false, env: ctx.env }));
+  return jsonResponse(serializePaste(updated, ctx.url.origin, { content: true, env: ctx.env }), 200, {}, { noindex: true });
 }
 
 /** DELETE /api/pastes/:id */

@@ -13,7 +13,19 @@ import { byteLength } from './validate.js';
  * `content` is deliberately excluded from list queries — pastes can be 10 MB.
  */
 export const PASTE_META_COLUMNS =
-  'id, title, language, font, font_size, size, views, user_id, created_at, updated_at, expires_at, password_hash, burn_mode, burned, visibility, thumbnail_url';
+  'id, title, language, font, font_size, size, views, user_id, created_at, updated_at, expires_at, password_hash, burn_mode, burned, visibility, thumbnail_url, title_color, pinned';
+
+/**
+ * The same column list qualified for a joined query (`p.id, p.title, …`).
+ * Without the prefix, `id`/`created_at` are ambiguous the moment a query joins
+ * `pastes` with any other table that has them — `users` always does.
+ * @param {string} alias
+ */
+export function pasteMetaColumns(alias) {
+  return PASTE_META_COLUMNS.split(',')
+    .map((column) => `${alias}.${column.trim()}`)
+    .join(', ');
+}
 
 /**
  * @typedef {object} Paste
@@ -34,6 +46,9 @@ export const PASTE_META_COLUMNS =
  * @property {number} [burned] 1 once a one-time paste has been handed out
  * @property {string} [visibility] 'unlisted' | 'public'
  * @property {string | null} [thumbnail_url] public image URL, or null
+ * @property {string | null} [formatting] JSON overlay of line-level display hints, or null
+ * @property {string | null} [title_color] per-paste title colour id, or null
+ * @property {number} [pinned] 1 when pinned to the top of a profile
  */
 
 /**
@@ -42,7 +57,8 @@ export const PASTE_META_COLUMNS =
  *   title: string, content: string, language: string, font: string,
  *   fontSize: number, expiresAt: number | null, userId?: number | null,
  *   passwordHash?: string | null, burnMode?: string, visibility?: string,
- *   thumbnailUrl?: string | null, now?: number
+ *   thumbnailUrl?: string | null, formatting?: string | null,
+ *   titleColor?: string | null, now?: number
  * }} input
  * @returns {Promise<Paste>}
  */
@@ -56,8 +72,8 @@ export async function createPaste(db, input) {
     try {
       await db.run(
         `INSERT INTO pastes
-           (id, title, content, language, font, font_size, size, views, user_id, created_at, updated_at, expires_at, password_hash, burn_mode, burned, visibility, thumbnail_url)
-         VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, 0, ?, ?)`,
+           (id, title, content, language, font, font_size, size, views, user_id, created_at, updated_at, expires_at, password_hash, burn_mode, burned, visibility, thumbnail_url, formatting, title_color)
+         VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?)`,
         [
           id,
           input.title,
@@ -74,6 +90,8 @@ export async function createPaste(db, input) {
           input.burnMode ?? DEFAULT_BURN_MODE,
           input.visibility ?? DEFAULT_VISIBILITY,
           input.thumbnailUrl || null,
+          input.formatting || null,
+          input.titleColor || null,
         ],
       );
       return {
@@ -94,6 +112,8 @@ export async function createPaste(db, input) {
         burned: 0,
         visibility: input.visibility ?? DEFAULT_VISIBILITY,
         thumbnail_url: input.thumbnailUrl || null,
+        formatting: input.formatting || null,
+        title_color: input.titleColor || null,
       };
     } catch (error) {
       if (!isUniqueViolation(error) || attempt === 3) throw error;
@@ -116,7 +136,7 @@ function isUniqueViolation(error) {
  */
 export async function getPaste(db, id, options = {}) {
   const now = options.now ?? Math.floor(Date.now() / 1000);
-  const columns = options.content === false ? PASTE_META_COLUMNS : `${PASTE_META_COLUMNS}, content`;
+  const columns = options.content === false ? PASTE_META_COLUMNS : `${PASTE_META_COLUMNS}, content, formatting`;
   const paste = await db.get(`SELECT ${columns} FROM pastes WHERE id = ?`, [id]);
   if (!paste) return null;
   // A consumed one-time paste is gone even if a winner died before deleting it.
@@ -184,6 +204,16 @@ export async function updatePaste(db, id, userId, fields, now = Math.floor(Date.
     assignments.push('thumbnail_url = ?');
     params.push(fields.thumbnailUrl || null);
   }
+  // Tri-state: `undefined` keeps the stored overlay, `null`/'' clears it (the
+  // author removed the formatting), a string replaces it.
+  if (fields.formatting !== undefined) {
+    assignments.push('formatting = ?');
+    params.push(fields.formatting || null);
+  }
+  if (fields.titleColor !== undefined) {
+    assignments.push('title_color = ?');
+    params.push(fields.titleColor || null);
+  }
   params.push(id, userId);
 
   await db.run(
@@ -193,7 +223,57 @@ export async function updatePaste(db, id, userId, fields, now = Math.floor(Date.
   return { ok: true };
 }
 
-/** Delete an owned paste (and its view log). */
+/**
+ * Pin or unpin an owned paste.
+ *
+ * A pin only means something on a public profile, so an unlisted paste cannot
+ * be pinned — the caller turns that into a message rather than a silent no-op.
+ * The per-profile cap is enforced by the route (`PINNED_LIMIT`).
+ * @param {Db} db
+ */
+export async function setPastePinned(db, id, userId, pinned) {
+  if (!Number.isFinite(userId)) return { ok: false, reason: 'unauthorized' };
+  const row = await db.get('SELECT id, user_id, visibility FROM pastes WHERE id = ?', [id]);
+  if (!row) return { ok: false, reason: 'missing' };
+  if (Number(row.user_id) !== Number(userId)) return { ok: false, reason: 'unauthorized' };
+  if (pinned && String(row.visibility ?? 'unlisted') !== 'public') return { ok: false, reason: 'unlisted' };
+  await db.run('UPDATE pastes SET pinned = ? WHERE id = ? AND user_id = ?', [pinned ? 1 : 0, id, userId]);
+  return { ok: true };
+}
+
+/** How many pastes this account has pinned (the route enforces the cap). */
+export async function countPinnedPastes(db, userId) {
+  const row = await db.get('SELECT COUNT(*) AS n FROM pastes WHERE user_id = ? AND pinned = 1', [Number(userId)]);
+  return Number(row?.n ?? 0);
+}
+
+/**
+ * Statements that erase everything pointing at one or more pastes.
+ *
+ * A deleted paste must not leave rows behind: a bookmark or a notification
+ * pointing at a 404 is worse than no row, and reactions on a paste nobody can
+ * open are noise. Every deletion path (owner delete, expiry sweep, burn sweep,
+ * admin action) uses this list, so none of them can forget a table.
+ *
+ * The `pastes` row itself is deliberately *not* included — callers delete it
+ * first when they need the affected-row count (ownership checks), or last when
+ * they do not.
+ *
+ * @param {string | string[]} ids
+ * @returns {import('./social.js').Statement[]}
+ */
+export function pasteChildStatements(ids) {
+  const list = Array.isArray(ids) ? ids.map((id) => String(id)) : [String(ids)];
+  const placeholders = list.map(() => '?').join(', ');
+  return [
+    { sql: `DELETE FROM bookmarks WHERE paste_id IN (${placeholders})`, params: list },
+    { sql: `DELETE FROM reactions WHERE paste_id IN (${placeholders})`, params: list },
+    { sql: `DELETE FROM notifications WHERE paste_id IN (${placeholders})`, params: list },
+    { sql: `DELETE FROM paste_views WHERE paste_id IN (${placeholders})`, params: list },
+  ];
+}
+
+/** Delete an owned paste (and its view log, bookmarks, reactions, notifications). */
 export async function deletePaste(db, id, userId) {
   if (!Number.isFinite(userId)) return { ok: false, reason: 'unauthorized' };
   const result = await db.run('DELETE FROM pastes WHERE id = ? AND user_id = ?', [id, userId]);
@@ -201,15 +281,15 @@ export async function deletePaste(db, id, userId) {
     const existing = await db.get('SELECT id FROM pastes WHERE id = ?', [id]);
     return { ok: false, reason: existing ? 'unauthorized' : 'missing' };
   }
-  await db.run('DELETE FROM paste_views WHERE paste_id = ?', [id]);
+  await db.batch(pasteChildStatements(id));
   return { ok: true };
 }
 
 /** Internal delete without ownership checks (expiry + admin sweeps). */
 export async function deletePasteRows(db, id) {
   await db.batch([
-    { sql: 'DELETE FROM pastes WHERE id = ?', params: [id] },
-    { sql: 'DELETE FROM paste_views WHERE paste_id = ?', params: [id] },
+    { sql: 'DELETE FROM pastes WHERE id = ?', params: [String(id)] },
+    ...pasteChildStatements(id),
   ]);
 }
 
@@ -221,7 +301,7 @@ export async function listUserPastes(db, userId, limit = 200, now = Math.floor(D
   return db.all(
     `SELECT ${PASTE_META_COLUMNS} FROM pastes
       WHERE user_id = ? AND (expires_at IS NULL OR expires_at > ?) AND burned = 0
-      ORDER BY created_at DESC LIMIT ?`,
+      ORDER BY pinned DESC, created_at DESC LIMIT ?`,
     [userId, now, Math.min(Math.max(limit, 1), 500)],
   );
 }
@@ -272,8 +352,8 @@ export async function pruneExpired(db, now = Math.floor(Date.now() / 1000), batc
     const ids = rows.map((row) => row.id);
     const placeholders = ids.map(() => '?').join(', ');
     await db.batch([
-      { sql: `DELETE FROM paste_views WHERE paste_id IN (${placeholders})`, params: ids },
       { sql: `DELETE FROM pastes WHERE id IN (${placeholders})`, params: ids },
+      ...pasteChildStatements(ids),
     ]);
     total += ids.length;
     if (ids.length < batchSize) break;
@@ -283,13 +363,22 @@ export async function pruneExpired(db, now = Math.floor(Date.now() / 1000), batc
 
 /** Drop view-log rows older than the dedupe window (cleanup job). */
 export async function pruneViewLog(db, now = Math.floor(Date.now() / 1000), limit = 5000) {
-  const result = await db.run(
+  const cutoff = now - VIEW_DEDUPE_SECONDS;
+  // Sequential rather than batched: `batch()` reports no row counts, and the
+  // cleanup pass wants them.
+  const pastes = await db.run(
     `DELETE FROM paste_views WHERE rowid IN (
        SELECT rowid FROM paste_views WHERE created_at <= ? LIMIT ?
      )`,
-    [now - VIEW_DEDUPE_SECONDS, limit],
+    [cutoff, limit],
   );
-  return result.changes;
+  const profiles = await db.run(
+    `DELETE FROM profile_views WHERE rowid IN (
+       SELECT rowid FROM profile_views WHERE created_at <= ? LIMIT ?
+     )`,
+    [cutoff, limit],
+  );
+  return Number(pastes?.changes ?? 0) + Number(profiles?.changes ?? 0);
 }
 
 /**

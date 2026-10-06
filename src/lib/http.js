@@ -172,6 +172,34 @@ export function parseForm(text) {
   return out;
 }
 
+/**
+ * Parse a **multi-value** form body.
+ *
+ * `parseForm` keeps the last value of a repeated key, which is right for every
+ * ordinary form — but the profile customiser lets one form carry several link
+ * rows (`link_url` / `link_label` once per row). Here a key that appears once
+ * stays a string (so this is a superset of `parseForm`), and a key that appears
+ * more than once becomes an array, capped so a hostile body cannot make the
+ * array unbounded.
+ *
+ * @param {string} text
+ * @returns {Record<string, string | string[]>}
+ */
+export function parseFormValues(text) {
+  const params = new URLSearchParams(text);
+  /** @type {Record<string, string | string[]>} */
+  const out = {};
+  for (const [key, value] of params.entries()) {
+    if (key.length > 200) continue; // ignore junk keys
+    const existing = out[key];
+    if (existing === undefined) out[key] = value;
+    else if (Array.isArray(existing)) {
+      if (existing.length < 64) existing.push(value);
+    } else out[key] = [existing, value];
+  }
+  return out;
+}
+
 /** Parse a JSON body, rejecting anything that is not an object. */
 export function parseJson(text) {
   let value;

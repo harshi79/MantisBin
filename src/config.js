@@ -26,8 +26,15 @@ export const LIMITS = {
   highlightMaxBytes: 256 * 1024,
   /** Passwords are capped so hashing cannot be abused as a CPU DoS. */
   passwordMax: 256,
-  usernameMin: 4,
-  usernameMax: 6,
+  /**
+   * Usernames: 3–20 characters, letters/digits/underscore, unique
+   * case-insensitively. Widened for the merged app — the historic MantisBin
+   * rule was 4–6 alphanumeric, and every 4–6 character name still satisfies
+   * 3–20, so existing accounts keep their handle with no rename and no
+   * migration, while new sign-ups get the longer, underscore-friendly form.
+   */
+  usernameMin: 3,
+  usernameMax: 20,
   passwordMin: 8,
   /**
    * Optional per-paste passphrase (2.2 §1). Short codes get handed out over
@@ -366,7 +373,55 @@ export const RATE_LIMITS = {
    * image host that MantisBin does not pay for or control.
    */
   thumbnail: { limit: 20, window: 3600 },
+  /**
+   * Social actions — follow, bookmark, react, mark notifications read — share
+   * one bucket per account. These are cheap single-row writes, so the limit is
+   * generous; it exists to bound a script, not a person.
+   */
+  social: { limit: 240, window: 3600 },
+  /** Profile customisation saves (per account). */
+  profile: { limit: 30, window: 3600 },
+  /** Pin changes (per account): pins are cheap, but a toggle is still a write. */
+  pin: { limit: 60, window: 3600 },
+  /**
+   * GIF search and the sticker pack (per IP). Every search spends outbound
+   * quota on a third-party API that MantisBin does not pay for, so this bucket
+   * is tighter than a plain read — and the response is cacheable, so a busy
+   * editor is served from the edge rather than the provider.
+   */
+  media: { limit: 240, window: 3600 },
+  /**
+   * The notification bell polls one tiny query while a page is open (per
+   * account). Generous, because being throttled would only make the badge
+   * stale — never wrong.
+   */
+  notifyPoll: { limit: 1200, window: 3600 },
 };
+
+/**
+ * Third-party media search (merge phase 4). Both providers are outbound calls
+ * made by the Worker, never the browser: the Giphy key stays server-side, and
+ * a provider outage degrades to an empty result rather than an error page.
+ */
+export const MEDIA = {
+  /** Longest accepted search query. */
+  queryMax: 60,
+  /** Results returned to the editor per request. */
+  results: 24,
+  /** Absolute ceiling, whatever a caller asks for. */
+  resultsMax: 48,
+  /** Giphy's published public beta key: enough for small installs, no secret. */
+  giphyBetaKey: 'dc6zaTOxFJmzC',
+  /** Hosts a GIF may be imported from into the curated sticker pack. */
+  giphyHosts: ['media.giphy.com', 'media0.giphy.com', 'media1.giphy.com', 'media2.giphy.com', 'media3.giphy.com', 'media4.giphy.com', 'i.giphy.com'],
+  nekoHosts: ['nekos.best', 'nekos.best.cdn'],
+};
+
+/**
+ * How many pastes one profile may pin. Three keeps the top of a profile
+ * curated without letting it become a second, unordered listing.
+ */
+export const PROFILE_PIN_LIMIT = 3;
 
 /** Sessions last 30 days and slide forward on activity. */
 export const SESSION_TTL_SECONDS = 30 * 24 * 3600;
@@ -415,5 +470,155 @@ export const THEMES = [
   { id: 'auto', label: 'Auto' },
 ];
 
+/**
+ * Line-level formatting (merge phase 1).
+ *
+ * A paste's `content` is always the exact text — the source of truth for
+ * `/raw`, download, QR, fork, expiry, burning and the password gate. Rich
+ * presentation is an *optional overlay* stored beside it in
+ * `pastes.formatting` (JSON), keyed by 1-based line number:
+ *
+ *   { v: 1, lines: [ { line: 3, font: 'sans', size: 'lg', color: 'red' } ] }
+ *
+ * Every value here is an **id**, never a raw CSS value: the renderer emits a
+ * class (`fmt-f-sans`, `fmt-s-lg`, `fmt-c-red`) that resolves to a theme-aware
+ * variable in `public/app.css`. That keeps the strict CSP intact (no inline
+ * styles), keeps the palette legible in every theme, and means a stored
+ * document can never inject markup or CSS. Unknown ids are dropped rather
+ * than erroring — formatting is a display hint, so a paste must still save.
+ */
+export const FORMAT_FONTS = FONTS;
+
+export const FORMAT_SIZES = [
+  { id: 'sm', label: 'Small', px: 12 },
+  { id: 'md', label: 'Normal', px: 14 },
+  { id: 'lg', label: 'Large', px: 18 },
+  { id: 'xl', label: 'Heading', px: 24 },
+  { id: 'xxl', label: 'Title', px: 32 },
+];
+
+export const FORMAT_COLORS = [
+  { id: 'red', label: 'Red' },
+  { id: 'orange', label: 'Orange' },
+  { id: 'yellow', label: 'Yellow' },
+  { id: 'green', label: 'Green' },
+  { id: 'teal', label: 'Teal' },
+  { id: 'blue', label: 'Blue' },
+  { id: 'purple', label: 'Purple' },
+  { id: 'pink', label: 'Pink' },
+  { id: 'gray', label: 'Gray' },
+];
+
+export const FORMAT = {
+  /** Overlay shape version — bump only with a migration story. */
+  version: 1,
+  /** Hard cap on formatted lines: a display hint must not become a page cost. */
+  maxLines: 2000,
+  /** Hard cap on the serialised overlay itself. */
+  maxBytes: 64 * 1024,
+};
+
+/**
+ * Built-in emoji shortcodes, resolvable with no database and no admin setup.
+ * `:fire:` and `;fire;` are both accepted (the `;` form came from VibeBin).
+ * The curated sticker pack (`stickers` table) is consulted first at render
+ * time, so an administrator can override any token by adding it; an unknown
+ * token is left as literal text.
+ */
+export const EMOJI_SHORTCODES = {
+  wave: '👋', fire: '🔥', heart: '❤️', rocket: '🚀', sparkles: '✨', tada: '🎉',
+  thumbsup: '👍', ok: '👌', clap: '👏', pray: '🙏', eyes: '👀', brain: '🧠',
+  bug: '🐛', wrench: '🔧', hammer: '🔨', lock: '🔒', key: '🔑', bulb: '💡',
+  warning: '⚠️', check: '✅', cross: '❌', star: '⭐', zap: '⚡', boom: '💥',
+  coffee: '☕', pizza: '🍕', cake: '🍰', gift: '🎁', money: '💰', chart: '📈',
+  pin: '📌', memo: '📝', book: '📚', link: '🔗', shield: '🛡️', ghost: '👻',
+  smile: '😄', laugh: '😂', think: '🤔', cry: '😢', cool: '😎', party: '🥳',
+  sad: '😞', angry: '😠', love: '🥰', shrug: '🤷', facepalm: '🤦', dance: '💃',
+  hug: '🤗', kiss: '😘', pat: '🖐️', blush: '😊', wink: '😉',
+};
+
 /** Batch size for the scheduled cleanup job. */
 export const CLEANUP_BATCH = 500;
+
+/**
+ * Reactions: **one per account per paste**, chosen from this fixed palette.
+ *
+ * VibeBin allowed any single emoji plus a curated sticker token; MantisBin
+ * keeps the *one reaction per account* rule and narrows the vocabulary to a
+ * fixed, curated palette. That is deliberate:
+ *
+ *  - the palette is what the paste page renders, so the layout is predictable
+ *    (no 40-emoji pile-up under a paste);
+ *  - counts group cleanly (`❤️ 4 · 🔥 2`) without storing free-form text;
+ *  - the stored value is *canonical* — the emoji itself, validated on the way
+ *    in and on the way out — so nothing a visitor sends is ever rendered as
+ *    anything but one of these glyphs.
+ *
+ * The sticker pack is deliberately NOT used for reactions in this phase: a
+ * reaction is a single glyph with a count, and mixing remote images into that
+ * row would make the count unreadable.
+ */
+export const REACTIONS = [
+  { id: 'heart', emoji: '❤️', label: 'Love' },
+  { id: 'fire', emoji: '🔥', label: 'Fire' },
+  { id: 'clap', emoji: '👏', label: 'Applause' },
+  { id: 'laugh', emoji: '😂', label: 'Funny' },
+  { id: 'party', emoji: '🎉', label: 'Celebrate' },
+  { id: 'eyes', emoji: '👀', label: 'Watching' },
+  { id: 'mindblown', emoji: '🤯', label: 'Mind blown' },
+  { id: 'skull', emoji: '💀', label: 'Dead' },
+];
+
+/** The canonical glyphs, for validation. */
+export const REACTION_EMOJIS = new Set(REACTIONS.map((reaction) => reaction.emoji));
+
+/** Notification types (stable identifiers, never UI strings). */
+export const NOTIFICATION_TYPES = ['follow', 'reaction', 'new_paste', 'admin'];
+
+/**
+ * Bounds for the social layer. Everything here is a budget that keeps a
+ * popular account from turning one click into unbounded work: a follow with
+ * 50 000 followers writes at most `fanout` rows, a mailbox lists
+ * `notificationPage` rows per page, and read notifications are pruned after
+ * `notificationRetention` seconds so the table cannot grow forever.
+ */
+export const SOCIAL = {
+  /** Saved pastes per account. */
+  bookmarks: 2000,
+  /** Accounts one broadcast may reach; a bigger audience needs a second send. */
+  broadcastMax: 5000,
+  /** Broadcast title / message caps, enforced on the way in. */
+  broadcastTitle: 120,
+  broadcastMessage: 500,
+  /** Followers notified when an account publishes a public paste. */
+  fanout: 500,
+  /** Notifications per page. */
+  notificationPage: 20,
+  /** Read notifications older than this are deleted by maintenance. */
+  notificationRetention: 30 * 86400,
+  /** Rows per followers/following page. */
+  followListPage: 50,
+  /** Unread badge saturates here ("9+"). */
+  unreadBadgeMax: 9,
+};
+
+/**
+ * Names that no account may take, checked case-insensitively.
+ *
+ * With 3–20 character handles the namespace is wide enough for names that
+ * look like the service itself, so the operator's own vocabulary is fenced
+ * off: routes (`admin`, `api`, `me`, `docs`, `login`, `register`, `u`, `p`),
+ * brand (`mantisbin`, `mantis`), and support-flavoured names that would make
+ * an ordinary user look official. Reserved names are rejected at registration
+ * with "That username is reserved."; a reservation is not a user row, so
+ * nothing else in the app has to know about it.
+ */
+export const RESERVED_USERNAMES = [
+  'admin', 'administrator', 'api', 'docs', 'login', 'logout', 'register',
+  'support', 'help', 'root', 'moderator', 'mod', 'staff', 'official', 'system',
+  'mantisbin', 'mantis', 'security', 'abuse', 'billing', 'team', 'profile', 'account',
+];
+// Single/double-letter route words (`u`, `p`, `me`) are deliberately absent:
+// the 3-character minimum already makes them unregisterable, and a username
+// only ever appears in a URL as /u/:username, so they cannot collide.
+

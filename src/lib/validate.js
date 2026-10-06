@@ -4,7 +4,7 @@
  * through one of these functions.
  */
 
-import { AUTO_LANGUAGE, BURN_MODES, DEFAULT_BURN_MODE, DEFAULT_EXPIRATION, DEFAULT_FONT, DEFAULT_FONT_SIZE, DEFAULT_LANGUAGE, DEFAULT_VISIBILITY, EXPIRATIONS, FONTS, FONT_SIZES, LANGUAGES, LIMITS, VISIBILITY } from '../config.js';
+import { AUTO_LANGUAGE, BURN_MODES, DEFAULT_BURN_MODE, DEFAULT_EXPIRATION, DEFAULT_FONT, DEFAULT_FONT_SIZE, DEFAULT_LANGUAGE, DEFAULT_VISIBILITY, EXPIRATIONS, FONTS, FONT_SIZES, LANGUAGES, LIMITS, RESERVED_USERNAMES, VISIBILITY } from '../config.js';
 
 const encoder = new TextEncoder();
 
@@ -60,14 +60,31 @@ export function validateContent(value, maxBytes) {
   return { ok: true, value: content, bytes };
 }
 
-/** 4–6 letters/numbers only, no separators. @returns {Result} */
+/**
+ * Usernames: 3–20 letters, digits or `_`, unique case-insensitively (the
+ * uniqueness key is `users.username_key`, the lowercased form).
+ *
+ * This is the merged rule. The historic MantisBin rule was 4–6 alphanumeric;
+ * widening a validation rule never invalidates an existing value, so every
+ * legacy handle still passes untouched while new sign-ups may use longer,
+ * underscore-friendly names. One validator serves registration *and* profile
+ * lookup, so the two can never drift.
+ *
+ * A small reserved list keeps service-looking names (`admin`, `api`, `me`,
+ * `support`, …) out of user hands — impersonation of the operator is the one
+ * thing a wider namespace makes easier.
+ * @returns {Result}
+ */
 export function validateUsername(value) {
   const raw = typeof value === 'string' ? value.trim() : '';
   if (raw.length < LIMITS.usernameMin || raw.length > LIMITS.usernameMax) {
     return { ok: false, error: `Username must be ${LIMITS.usernameMin}–${LIMITS.usernameMax} characters.` };
   }
-  if (!/^[A-Za-z0-9]+$/.test(raw)) {
-    return { ok: false, error: 'Username may only contain letters and numbers (no spaces, _ - . or symbols).' };
+  if (!/^[A-Za-z0-9_]+$/.test(raw)) {
+    return { ok: false, error: 'Username may only contain letters, numbers and underscores.' };
+  }
+  if (RESERVED_USERNAMES.includes(raw.toLowerCase())) {
+    return { ok: false, error: 'That username is reserved.' };
   }
   return { ok: true, value: raw };
 }

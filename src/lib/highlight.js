@@ -432,14 +432,33 @@ export function renderCode(content, languageId, options = {}) {
  * each line boundary, so every line can have its own stable anchor without
  * breaking the token markup. It only receives HTML produced by this module.
  *
+ * `options.classes` is an optional `Map<number, string>` of extra classes per
+ * 1-based line number (line-level formatting, merge phase 1). Classes are
+ * produced by `lib/formatting.js` from id whitelists, never from user text, so
+ * they are safe to place in the attribute; a line with no entry renders exactly
+ * as it did before this parameter existed.
+ *
  * @param {string} renderedHtml
+ * @param {{ classes?: Map<number, string> }} [options]
  * @returns {string}
  */
-export function addLineAnchors(renderedHtml) {
+/**
+ * Elements that never take a closing tag. `addLineAnchors` re-opens open tags on
+ * every line so each line is self-contained; a void element pushed onto that
+ * stack would be re-opened on every following line and closed with `</img>`.
+ * The code renderers here only emit `span`/`a`, but stickers arrive as `<img>`.
+ */
+const VOID_ELEMENTS = new Set([
+  'area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input',
+  'link', 'meta', 'source', 'track', 'wbr',
+]);
+
+export function addLineAnchors(renderedHtml, options = {}) {
+  const classes = options.classes || null;
   const tokens = String(renderedHtml).split(/(<\/?[a-z][^>]*>)/gi);
   const openTags = [];
   let line = 1;
-  let out = openLine(line);
+  let out = openLine(line, classes);
 
   for (const token of tokens) {
     if (!token) continue;
@@ -454,7 +473,8 @@ export function addLineAnchors(renderedHtml) {
       const opening = /^<([a-z][a-z0-9]*)\b[^>]*>$/i.exec(token);
       if (opening) {
         out += token;
-        if (!/\/\s*>$/.test(token)) openTags.push({ name: opening[1], tag: token });
+        const name = opening[1].toLowerCase();
+        if (!VOID_ELEMENTS.has(name) && !/\/\s*>$/.test(token)) openTags.push({ name: opening[1], tag: token });
         continue;
       }
 
@@ -473,7 +493,7 @@ export function addLineAnchors(renderedHtml) {
       }
       out += '</span></span>';
       line += 1;
-      out += openLine(line);
+      out += openLine(line, classes);
       for (const tag of openTags) out += tag.tag;
     }
   }
@@ -484,8 +504,10 @@ export function addLineAnchors(renderedHtml) {
   return out + '</span></span>';
 }
 
-function openLine(line) {
-  return `<span class="code-line" id="line-${line}" data-line="${line}"><a class="line-number" href="#line-${line}" aria-label="Line ${line}">${line}</a><span class="line-content">`;
+function openLine(line, classes) {
+  const extra = classes?.get(line);
+  const cls = extra ? `code-line ${extra}` : 'code-line';
+  return `<span class="${cls}" id="line-${line}" data-line="${line}"><a class="line-number" href="#line-${line}" aria-label="Line ${line}">${line}</a><span class="line-content">`;
 }
 
 // ---------------------------------------------------------------------------
